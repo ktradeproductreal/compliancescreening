@@ -1,0 +1,30 @@
+# Local MySQL 8 for development. Mirrors the GCP VM / Cloud SQL target so the
+# move to Phase 2 needs no app changes (see PRD §13). All values come from the
+# root .env file — never hardcode credentials here.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: compliance_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${DB_NAME:-compliance}
+      MYSQL_USER: ${DB_USER:-compliance}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-compliance}
+    ports:
+      # Host port is configurable so it won't clash with a local MySQL install.
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # schema.sql runs only on first init (empty data volume). Re-run with
+      # `docker compose down -v` to reset, or apply manually via `npm run db:migrate`.
+      - ./server/src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_ROOT_PASSWORD:-rootpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:

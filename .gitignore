@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment / secrets
+.env
+.env.local
+**/.env
+!**/.env.example
+
+# Build output
+client/dist/
+server/dist/
+
+# Logs (app logs to stdout only — these are stray tool logs)
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Uploaded list samples (kept out of VCS — may contain sensitive PII)
+*.xlsx
+*.xls
+samples/
+!**/sample-*.template.*
