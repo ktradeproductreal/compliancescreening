@@ -109,15 +109,16 @@ function isPakistanRelevant(r) {
 
 /**
  * @param {{ fullName: string }} input
- * @param {number} listId active unsc_lists.id
  * @returns {Promise<{ matched: boolean, match_type: string, records: object[] }>}
+ *
+ * Since 2026-06-13 records carry `is_active` and aren't scoped to a single list_id.
  */
-export async function matchUnsc({ fullName }, listId) {
+export async function matchUnsc({ fullName }) {
   const needle = normaliseForUnsc(fullName);
   const queryTokens = tokenize(needle);
   if (queryTokens.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
 
-  const rows = await query('SELECT * FROM unsc_records WHERE list_id = :listId', { listId });
+  const rows = await query('SELECT * FROM unsc_records WHERE is_active = 1');
   if (rows.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
 
   const asArray = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? safeJson(v) : []);

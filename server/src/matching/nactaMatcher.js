@@ -39,17 +39,20 @@ function displayRecord(r) {
 /**
  * @param {{ cnic: string, fullName: string, fatherName?: string }} input
  *        cnic must be the canonical XXXXX-XXXXXXX-X form; names are raw text.
- * @param {number} listId active nacta_lists.id
  * @returns {Promise<{ matched: boolean, match_type: string, records: object[] }>}
+ *
+ * As of 2026-06-13 records carry their own `is_active` flag — we no longer scope
+ * by a single list_id. All currently-active records (regardless of which upload
+ * first introduced them) are eligible.
  */
-export async function matchNacta({ cnic, fullName, fatherName }, listId) {
+export async function matchNacta({ cnic, fullName, fatherName }) {
   const normName = normalise(fullName);
   const normFather = normalise(fatherName);
 
   // ── Step 1: CNIC exact match (indexed) ────────────────────────────────────
   const cnicRows = await query(
-    'SELECT * FROM nacta_records WHERE list_id = :listId AND cnic = :cnic',
-    { listId, cnic },
+    'SELECT * FROM nacta_records WHERE is_active = 1 AND cnic = :cnic',
+    { cnic },
   );
 
   if (cnicRows.length > 0) {
@@ -73,8 +76,7 @@ export async function matchNacta({ cnic, fullName, fatherName }, listId) {
   // by a name match — not even as a possible match. Name matching therefore applies
   // exclusively to name-only (CNIC-less) records.
   const allRows = await query(
-    "SELECT * FROM nacta_records WHERE list_id = :listId AND (cnic IS NULL OR cnic = '')",
-    { listId },
+    "SELECT * FROM nacta_records WHERE is_active = 1 AND (cnic IS NULL OR cnic = '')",
   );
   if (allRows.length === 0) {
     return { matched: false, match_type: 'NO_MATCH', records: [] };

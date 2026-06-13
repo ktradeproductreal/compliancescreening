@@ -28,16 +28,18 @@ CREATE TABLE IF NOT EXISTS nacta_lists (
 
 CREATE TABLE IF NOT EXISTS nacta_records (
   id              INT AUTO_INCREMENT PRIMARY KEY,
-  list_id         INT NOT NULL,
+  list_id         INT NOT NULL,                 -- The list version that FIRST introduced this record (audit)
   full_name       VARCHAR(500) NOT NULL,        -- Normalised: UPPERCASE, trimmed
   father_name     VARCHAR(500) NOT NULL,
   cnic            VARCHAR(15) NULL,             -- Format: XXXXX-XXXXXXX-X; NULL = name-only record (no CNIC)
   raw_full_name   VARCHAR(500),                 -- Original as in file (for report display)
   raw_father_name VARCHAR(500),
   raw_cnic        VARCHAR(50),
+  is_active       TINYINT(1) NOT NULL DEFAULT 1, -- 1 = present in latest upload; 0 = removed (kept for audit)
   CONSTRAINT fk_nacta_records_list FOREIGN KEY (list_id) REFERENCES nacta_lists(id),
   INDEX idx_nacta_cnic (cnic),
-  INDEX idx_nacta_list_id (list_id)
+  INDEX idx_nacta_list_id (list_id),
+  INDEX idx_nacta_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS unsc_lists (
@@ -71,8 +73,11 @@ CREATE TABLE IF NOT EXISTS unsc_records (
   listed_on               VARCHAR(512),                -- includes amendment history, e.g. "29 Sep. 2005 (amended on ...)"
   original_script_name    VARCHAR(500),
   other_information       TEXT,
+  is_active               TINYINT(1) NOT NULL DEFAULT 1, -- 1 = present in latest upload; 0 = removed (kept for audit)
   CONSTRAINT fk_unsc_records_list FOREIGN KEY (list_id) REFERENCES unsc_lists(id),
   INDEX idx_unsc_list_id (list_id),
+  INDEX idx_unsc_active (is_active),
+  INDEX idx_unsc_ref_code (ref_code),
   FULLTEXT INDEX idx_unsc_primary_name (primary_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

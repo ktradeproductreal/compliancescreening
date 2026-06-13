@@ -40,10 +40,12 @@ export async function runScreening(user, input) {
     activeList('unsc_lists'),
   ]);
 
-  // Run both checks in parallel (PRD §7.4). Missing lists degrade gracefully.
+  // Run both checks in parallel (PRD §7.4). The matchers query records by
+  // is_active=1 directly (not by list_id) since 2026-06-13. We still gate on
+  // activeList for the audit version label + the "no list uploaded" display.
   const [nactaResult, unscResult] = await Promise.all([
-    nactaList ? matchNacta({ cnic, fullName, fatherName }, nactaList.id) : Promise.resolve(NO_LIST),
-    unscList ? matchUnsc({ fullName }, unscList.id) : Promise.resolve(NO_LIST),
+    nactaList ? matchNacta({ cnic, fullName, fatherName }) : Promise.resolve(NO_LIST),
+    unscList ? matchUnsc({ fullName }) : Promise.resolve(NO_LIST),
   ]);
 
   const nactaVersion = nactaList ? versionStamp(nactaList.version_label, nactaList.uploaded_at) : null;
