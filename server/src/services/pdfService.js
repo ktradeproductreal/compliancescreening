@@ -123,9 +123,12 @@ export function streamReport(res, screening, { disposition = 'inline' } = {}) {
   res.setHeader('Content-Disposition', `${disposition}; filename="${refNumber(screening.id)}.pdf"`);
   doc.pipe(res);
 
-  // Header
+  // Header — branded with the firm name on top
   hr(doc, 2);
-  doc.font('Helvetica-Bold').fontSize(16).text('COMPLIANCE SCREENING REPORT', { align: 'center' });
+  doc.font('Helvetica-Bold').fontSize(22).text('KTRADE SECURITIES LIMITED', { align: 'center' });
+  doc.moveDown(0.15);
+  doc.font('Helvetica-Bold').fontSize(13).text('Compliance Screening Report', { align: 'center' });
+  doc.moveDown(0.4);
   doc.font('Helvetica').fontSize(10)
     .text(`Report Ref: ${refNumber(screening.id)}`, { align: 'center' })
     .text(`Screened on: ${formatDateTime(screening.screened_at)}`, { align: 'center' });
