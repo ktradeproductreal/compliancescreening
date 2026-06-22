@@ -22,8 +22,24 @@ import { ingestNacta } from '../services/listIngestService.js';
 import { readState, writeState, runSync } from './_runSync.js';
 
 const URL = process.env.NACTA_URL || 'https://nfs.nacta.gov.pk/';
-const TIMEOUT_MS = Number(process.env.NACTA_SYNC_TIMEOUT_MS || 90_000);
+// 3-minute default: the Blazor SignalR data load can be slow over long-haul links.
+const TIMEOUT_MS = Number(process.env.NACTA_SYNC_TIMEOUT_MS || 180_000);
 const FORCE = process.env.NACTA_FORCE_DOWNLOAD === '1';
+const DEBUG_DIR = '/tmp';
+
+/** Write the failed page state to /tmp for diagnosis. Best-effort — swallows errors. */
+async function dumpFailure(page, tag) {
+  try {
+    const ts = Date.now();
+    const png = `${DEBUG_DIR}/nacta-${tag}-${ts}.png`;
+    const html = `${DEBUG_DIR}/nacta-${tag}-${ts}.html`;
+    await page.screenshot({ path: png, fullPage: true });
+    await fs.writeFile(html, await page.content());
+    console.error(`[nacta] debug artefacts written: ${png} / ${html}`);
+  } catch {
+    /* ignore — diagnosis only */
+  }
+}
 
 /** Open the page, return { browser, page, count } where count is the scraped total. */
 async function openAndScrape() {
@@ -40,32 +56,58 @@ async function openAndScrape() {
     const page = await context.newPage();
     page.setDefaultTimeout(TIMEOUT_MS);
 
+    // Log page-level errors + console errors so we can see SignalR/Blazor issues.
+    page.on('pageerror', (e) => console.error('[nacta] PAGE ERROR:', e.message));
+    page.on('console', (m) => {
+      if (m.type() === 'error') console.error('[nacta] PAGE CONSOLE ERROR:', m.text());
+    });
+    page.on('requestfailed', (req) =>
+      console.error(`[nacta] REQUEST FAILED: ${req.url()} -- ${req.failure()?.errorText}`),
+    );
+
     console.log(`[nacta] navigating to ${URL} ...`);
     // 'networkidle' never fires on Blazor pages because the SignalR WebSocket
     // stays open for the page's lifetime. Use 'domcontentloaded' (early signal)
     // and explicitly wait for the data-loaded signals below.
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
 
-    // The Blazor app renders the chrome immediately (showing Total Results: 0
-    // and a disabled EXPORT button) and then async-fetches the records. We wait
-    // for BOTH of these "data is ready" signals before reading anything:
-    //   1. The EXPORT button loses its `disabled` class.
-    //   2. Total Results shows a non-zero number.
+    // The Blazor app renders the chrome immediately (Total Results: 0 + disabled
+    // EXPORT button) and then async-fetches records over SignalR. We wait for
+    // BOTH "data is ready" signals: Export enabled + count > 0.
+    //
+    // We poll manually instead of using waitForFunction so we can print progress
+    // — silent 3-minute hangs are the worst kind to debug.
     console.log('[nacta] waiting for Blazor data load (Export enabled + count > 0) ...');
-    await page.waitForFunction(
-      () => {
+    const t0 = Date.now();
+    let snapshot = { count: 0, exportEnabled: false };
+    while (Date.now() - t0 < TIMEOUT_MS) {
+      snapshot = await page.evaluate(() => {
         const btn = Array.from(document.querySelectorAll('button')).find(
           (b) => /export/i.test(b.textContent || ''),
         );
-        if (!btn || btn.disabled || btn.classList.contains('disabled')) return false;
+        const exportEnabled = !!btn && !btn.disabled && !btn.classList.contains('disabled');
         const countEl = Array.from(document.querySelectorAll('i, span, div'))
           .find((e) => /total results:/i.test(e.textContent || ''));
-        if (!countEl) return false;
-        const m = countEl.textContent.match(/Total Results:\s*([\d,]+)/i);
-        return m && Number(m[1].replace(/,/g, '')) > 0;
-      },
-      { timeout: TIMEOUT_MS, polling: 500 },
-    );
+        let count = 0;
+        if (countEl) {
+          const m = countEl.textContent.match(/Total Results:\s*([\d,]+)/i);
+          if (m) count = Number(m[1].replace(/,/g, ''));
+        }
+        return { count, exportEnabled };
+      });
+      if (snapshot.exportEnabled && snapshot.count > 0) break;
+      const elapsed = Math.round((Date.now() - t0) / 1000);
+      console.log(`[nacta]   still waiting (${elapsed}s) — count=${snapshot.count}, export-enabled=${snapshot.exportEnabled}`);
+      await page.waitForTimeout(10_000);
+    }
+    if (!snapshot.exportEnabled || snapshot.count === 0) {
+      await dumpFailure(page, 'data-load');
+      throw new Error(
+        `Blazor data load did not complete within ${TIMEOUT_MS}ms ` +
+          `(last snapshot: count=${snapshot.count}, export-enabled=${snapshot.exportEnabled}). ` +
+          `See /tmp/nacta-data-load-*.png for the page state.`,
+      );
+    }
 
     const countText = await page.locator('text=/Total Results:/i').first().textContent();
     const match = countText && countText.match(/Total Results:\s*([\d,]+)/i);
