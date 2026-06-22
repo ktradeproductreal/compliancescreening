@@ -43,17 +43,35 @@ async function openAndScrape() {
     console.log(`[nacta] navigating to ${URL} ...`);
     // 'networkidle' never fires on Blazor pages because the SignalR WebSocket
     // stays open for the page's lifetime. Use 'domcontentloaded' (early signal)
-    // and let the explicit "Total Results:" wait below confirm the app rendered.
+    // and explicitly wait for the data-loaded signals below.
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
 
-    // The total count lives in <i class="text-black-50">Total Results: NNNN</i>.
-    // Wait until that text appears (Blazor renders it after the table loads).
-    await page.locator('text=/Total Results:/i').first().waitFor({ timeout: TIMEOUT_MS });
+    // The Blazor app renders the chrome immediately (showing Total Results: 0
+    // and a disabled EXPORT button) and then async-fetches the records. We wait
+    // for BOTH of these "data is ready" signals before reading anything:
+    //   1. The EXPORT button loses its `disabled` class.
+    //   2. Total Results shows a non-zero number.
+    console.log('[nacta] waiting for Blazor data load (Export enabled + count > 0) ...');
+    await page.waitForFunction(
+      () => {
+        const btn = Array.from(document.querySelectorAll('button')).find(
+          (b) => /export/i.test(b.textContent || ''),
+        );
+        if (!btn || btn.disabled || btn.classList.contains('disabled')) return false;
+        const countEl = Array.from(document.querySelectorAll('i, span, div'))
+          .find((e) => /total results:/i.test(e.textContent || ''));
+        if (!countEl) return false;
+        const m = countEl.textContent.match(/Total Results:\s*([\d,]+)/i);
+        return m && Number(m[1].replace(/,/g, '')) > 0;
+      },
+      { timeout: TIMEOUT_MS, polling: 500 },
+    );
+
     const countText = await page.locator('text=/Total Results:/i').first().textContent();
     const match = countText && countText.match(/Total Results:\s*([\d,]+)/i);
     const count = match ? Number(match[1].replace(/,/g, '')) : null;
-    if (count === null || Number.isNaN(count)) {
-      throw new Error(`Could not parse a number from "${countText}"`);
+    if (count === null || Number.isNaN(count) || count === 0) {
+      throw new Error(`Could not parse a non-zero count from "${countText}"`);
     }
     console.log(`[nacta] page reports Total Results: ${count}`);
     return { browser, page, count };
@@ -65,23 +83,24 @@ async function openAndScrape() {
 
 /** Click Export → Excel and return the downloaded file as a Buffer. */
 async function exportExcel(page) {
-  // The NACTA page typically shows an "Export" button that opens a small menu
-  // with "Excel / JSON / XML". We use case-insensitive text matching so the
-  // script survives small UI changes.
+  // The NACTA page shows an "Export" button (now enabled, since openAndScrape
+  // waited for the data load). Clicking it opens a small menu with Excel/JSON/XML.
+  // We scroll into view + force-click to bypass any overlay from the adjacent
+  // pagination control that's intercepting pointer events during layout settle.
   console.log('[nacta] clicking Export ...');
-  const exportBtn = page.locator('button, a').filter({ hasText: /export/i }).first();
-  await exportBtn.click();
+  const exportBtn = page.locator('button').filter({ hasText: /export/i }).first();
+  await exportBtn.scrollIntoViewIfNeeded();
+  await exportBtn.click({ force: true });
 
-  // Wait for the "Excel" option to be visible, then click it AND wait for the
-  // download event in a Promise.all (Playwright's recommended pattern).
   console.log('[nacta] selecting Excel ...');
   const excelOption = page.locator('button, a, li, [role="menuitem"]')
     .filter({ hasText: /^\s*excel\s*$/i })
     .first();
+  await excelOption.waitFor({ state: 'visible', timeout: TIMEOUT_MS });
 
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: TIMEOUT_MS }),
-    excelOption.click(),
+    excelOption.click({ force: true }),
   ]);
 
   const tmpPath = await download.path();
