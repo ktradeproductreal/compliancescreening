@@ -243,6 +243,82 @@ sudo tail -100 /www/wwwlogs/34-55-250-189.nip.io.log
 
 ---
 
+## Automated list sync (cron)
+
+Two scheduled scripts keep NACTA + UNSC in sync without manual uploads:
+
+| Source | Cadence | How it fetches | Skip-when-unchanged signal |
+|---|---|---|---|
+| NACTA | every 3 hours | Headless Chromium (Playwright) navigates `https://nfs.nacta.gov.pk/`, scrapes the "Total Results" count, clicks Export → Excel | record count matches `sync_state.last_count` |
+| UNSC | daily at 03:00 PKT | Plain HTTPS GET of `https://scsanctions.un.org/resources/xml/en/consolidated.xml` | SHA-256 of file body matches `sync_state.last_signature` |
+
+Both runs reuse the same deduplicated ingest pipeline as the UI's Upload Lists
+page, so identical data is a no-op (added: 0, kept: N).
+
+### One-time setup on the VM (after first deploy)
+
+```bash
+# Install the Chromium binary that Playwright uses (~150MB, one-time)
+cd /www/wwwroot/compliance/server
+npx playwright install chromium --with-deps
+
+# Make the cron wrappers executable
+chmod +x /www/wwwroot/compliance/deploy/sync-nacta.sh \
+         /www/wwwroot/compliance/deploy/sync-unsc.sh
+
+# Smoke-test each script once manually
+npm run sync:unsc
+npm run sync:nacta
+```
+
+Each command should print a one-line summary like
+`[unsc] success {"total_active":1002,"added":0,...} — 4321ms`.
+
+### Add the two cron entries in aaPanel
+
+**aaPanel → Cron → Add task** (twice — once per source):
+
+**NACTA — every 3 hours**
+
+| Field | Value |
+|---|---|
+| Task type | Shell Script |
+| Name | `compliance-sync-nacta` |
+| Cycle | Every N hours → **3** |
+| Script content | `bash /www/wwwroot/compliance/deploy/sync-nacta.sh` |
+
+**UNSC — daily at 03:00**
+
+| Field | Value |
+|---|---|
+| Task type | Shell Script |
+| Name | `compliance-sync-unsc` |
+| Cycle | Every day → **03:00** |
+| Script content | `bash /www/wwwroot/compliance/deploy/sync-unsc.sh` |
+
+aaPanel saves cron output under `/www/server/cron/<task-id>.log` — click the
+**Logs** button next to each task to inspect recent runs.
+
+### Watching it from the Dashboard
+
+The portal Dashboard shows a "Last auto-sync" line under each list card with a
+small badge: `✓ synced`, `· unchanged`, `⚠ failed`, or `syncing…`. If you see
+`⚠ failed` the error message appears in the row — and the full stack trace is
+in the `sync_log` table (phpMyAdmin → `compliance` → `sync_log`).
+
+### Manual override
+
+You can still upload via the UI at any time — auto-sync respects whatever data
+is in the DB and only changes things when the upstream source has actually
+changed. To force an immediate auto-sync regardless of the count check:
+
+```bash
+cd /www/wwwroot/compliance/server
+NACTA_FORCE_DOWNLOAD=1 npm run sync:nacta
+```
+
+---
+
 ## Quick reference URLs
 
 - Live portal: <https://34-55-250-189.nip.io>

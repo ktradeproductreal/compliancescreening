@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS unsc_records (
   FULLTEXT INDEX idx_unsc_primary_name (primary_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── Automated list sync state + audit (added 2026-06-22) ──────────────────
+-- Two cron-driven sync scripts (NACTA every 3h, UNSC daily) update these.
+-- sync_state holds the change-detection signal per source; sync_log gives a
+-- per-run audit trail visible in phpMyAdmin / the Dashboard.
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  source          VARCHAR(20) PRIMARY KEY,    -- 'nacta' | 'unsc'
+  last_count      INT NULL,                   -- last seen record count (NACTA: scraped from page)
+  last_signature  VARCHAR(255) NULL,          -- SHA-256 of last fetched file body (UNSC)
+  updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sync_log (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  source        VARCHAR(20) NOT NULL,         -- 'nacta' | 'unsc'
+  started_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+  ended_at      DATETIME NULL,
+  status        VARCHAR(20) NOT NULL,         -- 'success' | 'unchanged' | 'failed' | 'running'
+  delta_json    JSON NULL,                    -- dedup delta when status = success
+  error         TEXT NULL,                    -- error message when status = failed
+  triggered_by  VARCHAR(20) DEFAULT 'cron',   -- 'cron' | 'manual'
+  INDEX idx_sync_log_source_started (source, started_at DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS screenings (
   id                  INT AUTO_INCREMENT PRIMARY KEY,
   screened_by         INT NULL,                  -- NULL = external API screening (no human user)
