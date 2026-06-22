@@ -71,21 +71,22 @@ async function openAndScrape() {
     // and explicitly wait for the data-loaded signals below.
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
 
-    // The Blazor app renders the chrome immediately (Total Results: 0 + disabled
-    // EXPORT button) and then async-fetches records over SignalR. We wait for
-    // BOTH "data is ready" signals: Export enabled + count > 0.
+    // The Blazor app renders the chrome immediately (Total Results: 0 + a
+    // disabled "EXPORT" LABEL — that's not a real button, it's just text) and
+    // then async-fetches records over SignalR. The actual triggers are three
+    // buttons beside the label: EXCEL / JSON / XML. We use EXCEL.
     //
-    // We poll manually instead of using waitForFunction so we can print progress
-    // — silent 3-minute hangs are the worst kind to debug.
-    console.log('[nacta] waiting for Blazor data load (Export enabled + count > 0) ...');
+    // "Data is ready" = count > 0 AND the EXCEL button exists & is enabled.
+    // We poll manually instead of using waitForFunction so we can print progress.
+    console.log('[nacta] waiting for Blazor data load (count > 0, EXCEL button enabled) ...');
     const t0 = Date.now();
-    let snapshot = { count: 0, exportEnabled: false };
+    let snapshot = { count: 0, excelEnabled: false };
     while (Date.now() - t0 < TIMEOUT_MS) {
       snapshot = await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button')).find(
-          (b) => /export/i.test(b.textContent || ''),
-        );
-        const exportEnabled = !!btn && !btn.disabled && !btn.classList.contains('disabled');
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const excelBtn = buttons.find((b) => /^\s*excel\s*$/i.test(b.textContent || ''));
+        const excelEnabled =
+          !!excelBtn && !excelBtn.disabled && !excelBtn.classList.contains('disabled');
         const countEl = Array.from(document.querySelectorAll('i, span, div'))
           .find((e) => /total results:/i.test(e.textContent || ''));
         let count = 0;
@@ -93,18 +94,18 @@ async function openAndScrape() {
           const m = countEl.textContent.match(/Total Results:\s*([\d,]+)/i);
           if (m) count = Number(m[1].replace(/,/g, ''));
         }
-        return { count, exportEnabled };
+        return { count, excelEnabled };
       });
-      if (snapshot.exportEnabled && snapshot.count > 0) break;
+      if (snapshot.excelEnabled && snapshot.count > 0) break;
       const elapsed = Math.round((Date.now() - t0) / 1000);
-      console.log(`[nacta]   still waiting (${elapsed}s) — count=${snapshot.count}, export-enabled=${snapshot.exportEnabled}`);
+      console.log(`[nacta]   still waiting (${elapsed}s) — count=${snapshot.count}, excel-enabled=${snapshot.excelEnabled}`);
       await page.waitForTimeout(10_000);
     }
-    if (!snapshot.exportEnabled || snapshot.count === 0) {
+    if (!snapshot.excelEnabled || snapshot.count === 0) {
       await dumpFailure(page, 'data-load');
       throw new Error(
         `Blazor data load did not complete within ${TIMEOUT_MS}ms ` +
-          `(last snapshot: count=${snapshot.count}, export-enabled=${snapshot.exportEnabled}). ` +
+          `(last snapshot: count=${snapshot.count}, excel-enabled=${snapshot.excelEnabled}). ` +
           `See /tmp/nacta-data-load-*.png for the page state.`,
       );
     }
@@ -123,26 +124,17 @@ async function openAndScrape() {
   }
 }
 
-/** Click Export → Excel and return the downloaded file as a Buffer. */
+/** Click EXCEL and return the downloaded file as a Buffer. */
 async function exportExcel(page) {
-  // The NACTA page shows an "Export" button (now enabled, since openAndScrape
-  // waited for the data load). Clicking it opens a small menu with Excel/JSON/XML.
-  // We scroll into view + force-click to bypass any overlay from the adjacent
-  // pagination control that's intercepting pointer events during layout settle.
-  console.log('[nacta] clicking Export ...');
-  const exportBtn = page.locator('button').filter({ hasText: /export/i }).first();
-  await exportBtn.scrollIntoViewIfNeeded();
-  await exportBtn.click({ force: true });
-
-  console.log('[nacta] selecting Excel ...');
-  const excelOption = page.locator('button, a, li, [role="menuitem"]')
-    .filter({ hasText: /^\s*excel\s*$/i })
-    .first();
-  await excelOption.waitFor({ state: 'visible', timeout: TIMEOUT_MS });
+  // EXCEL is a direct download button (one of three siblings: EXCEL / JSON / XML
+  // next to the "EXPORT" label). One click → file downloads.
+  console.log('[nacta] clicking EXCEL ...');
+  const excelBtn = page.locator('button').filter({ hasText: /^\s*excel\s*$/i }).first();
+  await excelBtn.scrollIntoViewIfNeeded();
 
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: TIMEOUT_MS }),
-    excelOption.click({ force: true }),
+    excelBtn.click({ force: true }),
   ]);
 
   const tmpPath = await download.path();
