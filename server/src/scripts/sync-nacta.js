@@ -41,7 +41,10 @@ async function openAndScrape() {
     page.setDefaultTimeout(TIMEOUT_MS);
 
     console.log(`[nacta] navigating to ${URL} ...`);
-    await page.goto(URL, { waitUntil: 'networkidle' });
+    // 'networkidle' never fires on Blazor pages because the SignalR WebSocket
+    // stays open for the page's lifetime. Use 'domcontentloaded' (early signal)
+    // and let the explicit "Total Results:" wait below confirm the app rendered.
+    await page.goto(URL, { waitUntil: 'domcontentloaded' });
 
     // The total count lives in <i class="text-black-50">Total Results: NNNN</i>.
     // Wait until that text appears (Blazor renders it after the table loads).
