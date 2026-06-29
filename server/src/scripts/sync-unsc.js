@@ -17,6 +17,10 @@ import { readState, writeState, runSync } from './_runSync.js';
 const URL = process.env.UNSC_URL ||
   'https://scsanctions.un.org/resources/xml/en/consolidated.xml';
 const TIMEOUT_MS = 60_000;
+// Set UNSC_FORCE_DOWNLOAD=1 to bypass the hash-based skip — useful after a schema
+// or parser change that should refresh stored attributes even if the feed body
+// hasn't changed.
+const FORCE = process.env.UNSC_FORCE_DOWNLOAD === '1';
 
 async function fetchXml(url) {
   // Node 18+ has fetch built-in. Follow redirects (the UN endpoint 302s to
@@ -47,7 +51,7 @@ await runSync('unsc', async () => {
   const signature = sha256(buf);
 
   const state = await readState('unsc');
-  if (state.last_signature && state.last_signature === signature) {
+  if (!FORCE && state.last_signature && state.last_signature === signature) {
     return { outcome: 'unchanged', reason: 'feed unchanged (hash match)' };
   }
 

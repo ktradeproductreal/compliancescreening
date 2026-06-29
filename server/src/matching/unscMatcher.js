@@ -1,32 +1,37 @@
-// UNSC matching engine (PRD §8.3) — TOKEN-AWARE.
+// UNSC matching engine — STRICT 3-CHECK MODE (changed 2026-06-23 per requirement).
 //
-// Why not plain Fuse.js: Fuse scores character overlap across the whole string,
-// so "ABDUL BARI" scores high against any "ABDUL ..." name because the shared
-// "ABDUL" chunk dominates — returning dozens of irrelevant hits that merely share
-// a common name particle. Instead we require that a SINGLE name/alias contains a
-// match for EVERY query word (token-AND). "ABDUL BARI" therefore matches only
-// names that have both an ABDUL-like AND a BARI-like token.
+// Tightening rationale: customer base is Pakistani-only, so we now require
+// EVERY one of these three independent checks to pass before returning a hit:
 //
-// Score model is unchanged conceptually: a 0..1 similarity with the same bands
-// (≥0.85 confirmed; ≥ floor possible). Here the score is the average of each
-// query word's best per-word similarity within the matching name/alias.
+//   1. NAME match     — same token-AND fuzzy logic as before (no change).
+//   2. DOB YEAR match — submitted DOB's year must appear in the UNSC record's
+//                       dob field (UNSC records often only have year info).
+//   3. ID match       — submitted CNIC digits must match one of the UNSC record's
+//                       identification_numbers_json entries (passports / national
+//                       IDs / etc). If the UNSC record has NO ID, the check fails.
+//
+// "If 2 of 3 match it's still NO_MATCH" — explicitly required by user.
+// The previous "Pakistan-relevance" filter is REMOVED.
+//
+// Compliance trade-off: this is high-precision / low-recall. In practice the UNSC
+// list rarely has Pakistani CNICs as IDs, so most genuine sanctions hits won't
+// surface. The compliance officer should treat UNSC NO_MATCH as "no entry with a
+// matching ID" — not "person definitively not on the UN list."
 import { query } from '../db/db.js';
 import { normaliseForUnsc } from './normalise.js';
 import { config } from '../config/env.js';
+import { parseDob, extractYears } from '../utils/dob.js';
 
-const MIN_SIMILARITY = config.matching.unscThreshold; // overall floor (0.65)
+const MIN_SIMILARITY = config.matching.unscThreshold;       // 0.65 — name floor
 const CONFIRMED_SIMILARITY = 0.85;
-const TOKEN_SIM = config.matching.unscTokenThreshold; // per-word floor (0.8)
+const TOKEN_SIM = config.matching.unscTokenThreshold;       // 0.8 — per-word
 
-/** Split a name into comparable word tokens (drop particles shorter than 2 chars). */
+// ─── name-match helpers (unchanged from previous token-AND logic) ────────────
+
 function tokenize(s) {
-  return String(s ?? '')
-    .split(/[\s\-]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
+  return String(s ?? '').split(/[\s\-]+/).map((t) => t.trim()).filter((t) => t.length >= 2);
 }
 
-/** Levenshtein edit distance (iterative, two-row). Inputs are short name tokens. */
 function levenshtein(a, b) {
   if (a === b) return 0;
   if (!a.length) return b.length;
@@ -44,18 +49,13 @@ function levenshtein(a, b) {
   return prev[b.length];
 }
 
-/** Per-word similarity in [0,1]. */
 function wordSim(a, b) {
   if (a === b) return 1;
   const max = Math.max(a.length, b.length);
   return max === 0 ? 0 : 1 - levenshtein(a, b) / max;
 }
 
-/**
- * If `candidateStr` contains a ≥TOKEN_SIM match for EVERY query token, return the
- * average best per-token similarity (the match score). Otherwise return null
- * (a required word is missing → not a match).
- */
+/** Average best per-token similarity if every query token is "present"; else null. */
 function coverageScore(queryTokens, candidateStr) {
   const candTokens = tokenize(candidateStr);
   if (candTokens.length === 0) return null;
@@ -67,53 +67,62 @@ function coverageScore(queryTokens, candidateStr) {
       if (s > best) best = s;
       if (best === 1) break;
     }
-    if (best < TOKEN_SIM) return null; // this query word is not present
+    if (best < TOKEN_SIM) return null;
     sum += best;
   }
   return sum / queryTokens.length;
 }
 
-const mentionsPakistan = (v) => typeof v === 'string' && v.toLowerCase().includes('pakistan');
-const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
+// ─── ID-match helpers ────────────────────────────────────────────────────────
 
-/** Pakistan relevance flag — also shown in results/PDF for kept records. */
+/** Compare two ID strings ignoring everything non-alphanumeric, case-insensitive. */
+function idsMatch(submittedDigits, recordValue) {
+  if (!recordValue) return false;
+  const a = String(recordValue).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return a.length > 0 && a === submittedDigits;
+}
+
+const asArray = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? safeJson(v) : []);
+
+function safeJson(v) {
+  try {
+    const p = JSON.parse(v);
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+// Informational (kept so UI/PDF can still display the link if it exists)
+// — but does NOT filter results anymore.
 function pakistanLink(r) {
-  if (mentionsPakistan(r.nationality)) return 'Pakistani national';
-  if (mentionsPakistan(r.pob)) return `Place of birth mentions Pakistan: ${r.pob}`;
-  if (mentionsPakistan(r.address)) return `Address mentions Pakistan: ${r.address}`;
-  if (mentionsPakistan(r.other_information)) return `Other information mentions Pakistan: ${r.other_information}`;
+  const has = (v) => typeof v === 'string' && v.toLowerCase().includes('pakistan');
+  if (has(r.nationality)) return 'Pakistani national';
+  if (has(r.pob)) return `Place of birth mentions Pakistan: ${r.pob}`;
+  if (has(r.address)) return `Address mentions Pakistan: ${r.address}`;
+  if (has(r.other_information)) return `Other information mentions Pakistan: ${r.other_information}`;
   return null;
 }
 
-/**
- * Pakistan-relevance filter (business rule, 2026-05-29): customers are all
- * Pakistani, so foreign-only sanctions entries are noise. KEEP a record if it
- * mentions Pakistan ANYWHERE (nationality / POB / address / other-information),
- * OR if it has no nationality/POB/whereabouts at all (can't rule it out). DROP it
- * only when it has geographic info that does not reference Pakistan.
- * NOTE: this deviates from PRD §8.3 (which keeps all UNSC hits) and can suppress a
- * genuine match to a non-Pakistan-linked individual — accepted for this use case.
- */
-function isPakistanRelevant(r) {
-  if (
-    mentionsPakistan(r.nationality) ||
-    mentionsPakistan(r.pob) ||
-    mentionsPakistan(r.address) ||
-    mentionsPakistan(r.other_information)
-  ) {
-    return true;
-  }
-  const hasGeo = nonEmpty(r.nationality) || nonEmpty(r.pob) || nonEmpty(r.address);
-  return !hasGeo; // no geography to exclude on → keep (match by name)
-}
+// ─── Public entrypoint ──────────────────────────────────────────────────────
 
 /**
- * @param {{ fullName: string }} input
- * @returns {Promise<{ matched: boolean, match_type: string, records: object[] }>}
- *
- * Since 2026-06-13 records carry `is_active` and aren't scoped to a single list_id.
+ * @param {{ fullName: string, cnic: string, dob: string }} input
+ *        cnic = canonical XXXXX-XXXXXXX-X; dob = "DD-MMM-YYYY".
+ *        ALL three are required — missing any → NO_MATCH (cannot pass 3 checks).
  */
-export async function matchUnsc({ fullName }) {
+export async function matchUnsc({ fullName, cnic, dob }) {
+  // Pre-flight: ALL three inputs needed to even attempt a match.
+  const dobParts = parseDob(dob);
+  const cnicAlnum = String(cnic || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!fullName || !dobParts || cnicAlnum.length === 0) {
+    return { matched: false, match_type: 'NO_MATCH', records: [] };
+  }
+
   const needle = normaliseForUnsc(fullName);
   const queryTokens = tokenize(needle);
   if (queryTokens.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
@@ -121,34 +130,45 @@ export async function matchUnsc({ fullName }) {
   const rows = await query('SELECT * FROM unsc_records WHERE is_active = 1');
   if (rows.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
 
-  const asArray = (v) => (Array.isArray(v) ? v : typeof v === 'string' ? safeJson(v) : []);
-
   const hits = [];
   for (const row of rows) {
-    // Evaluate primary name AND each alias as standalone candidates — all query
-    // words must appear within ONE of them (not spread across different aliases).
+    // ── CHECK 1: NAME (token-AND across primary + aliases) ──
     const candidates = [row.primary_name_normalised, ...asArray(row.aliases_normalised_json)];
-    let best = 0;
+    let nameSim = 0;
     for (const c of candidates) {
       const score = coverageScore(queryTokens, c);
-      if (score !== null && score > best) best = score;
+      if (score !== null && score > nameSim) nameSim = score;
     }
-    if (best >= MIN_SIMILARITY) hits.push({ row, similarity: round2(best) });
+    if (nameSim < MIN_SIMILARITY) continue;
+
+    // ── CHECK 2: DOB YEAR ──
+    // UNSC records often store only year (or year ranges). Submitted DOB's year
+    // must appear in the extracted year set.
+    const years = extractYears(row.dob);
+    if (years.length === 0) continue;            // no DOB info on record → can't verify → not a match
+    if (!years.includes(dobParts.year)) continue;
+
+    // ── CHECK 3: IDENTIFICATION NUMBER ──
+    // Submitted CNIC (digits only, dashes stripped) must equal any one of the
+    // record's identification_numbers (also alnum-only, case-insensitive).
+    const ids = asArray(row.identification_numbers_json);
+    if (ids.length === 0) continue;              // record has no IDs → can't verify → not a match
+    const anyIdMatches = ids.some((id) => idsMatch(cnicAlnum, id));
+    if (!anyIdMatches) continue;
+
+    // All three independent verifications passed.
+    hits.push({ row, similarity: round2(nameSim) });
   }
 
   if (hits.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
+  hits.sort((a, b) => b.similarity - a.similarity);
 
-  // Pakistan-relevance filter: drop foreign-only sanctions entries (see isPakistanRelevant).
-  const relevant = hits.filter((h) => isPakistanRelevant(h.row));
-  if (relevant.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
-  relevant.sort((a, b) => b.similarity - a.similarity);
-
-  const anyConfirmed = relevant.some((h) => h.similarity >= CONFIRMED_SIMILARITY);
+  const anyConfirmed = hits.some((h) => h.similarity >= CONFIRMED_SIMILARITY);
 
   return {
     matched: true,
     match_type: anyConfirmed ? 'CONFIRMED_MATCH' : 'POSSIBLE_MATCH',
-    records: relevant.map(({ row, similarity }) => ({
+    records: hits.map(({ row, similarity }) => ({
       ref_code: row.ref_code,
       primary_name: row.primary_name,
       aliases: asArray(row.aliases_json),
@@ -156,21 +176,9 @@ export async function matchUnsc({ fullName }) {
       nationality: row.nationality,
       designation: row.designation,
       listed_on: row.listed_on,
-      pakistan_link: pakistanLink(row),
+      identification_numbers: asArray(row.identification_numbers_json),
+      pakistan_link: pakistanLink(row), // informational only
       match_score: similarity,
     })),
   };
-}
-
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
-
-function safeJson(v) {
-  try {
-    const parsed = JSON.parse(v);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }

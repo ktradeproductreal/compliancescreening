@@ -5,6 +5,7 @@ import { query, queryOne } from '../db/db.js';
 import { matchNacta } from '../matching/nactaMatcher.js';
 import { matchUnsc } from '../matching/unscMatcher.js';
 import { isValidCnic, formatCnic } from '../utils/cnic.js';
+import { isValidDob, formatDob } from '../utils/dob.js';
 import { versionStamp } from '../utils/dates.js';
 import { HttpError } from '../utils/asyncHandler.js';
 
@@ -19,33 +20,39 @@ async function activeList(table) {
 
 /**
  * @param {{ id: number }} user
- * @param {{ cnic: string, full_name: string, father_name?: string }} input
- * @returns {Promise<{ id: number, nacta: object, unsc: object, nacta_list_version: string|null, unsc_list_version: string|null }>}
+ * @param {{ cnic: string, full_name: string, father_name?: string, dob: string }} input
+ *        dob format: dd-MMM-yyyy (e.g. "10-JAN-2030"). Required since 2026-06-23 for
+ *        UNSC matching; NACTA does not use it.
  */
 export async function runScreening(user, input) {
   const fullName = (input.full_name || '').trim();
   const fatherName = (input.father_name || '').trim();
+  const dobRaw = (input.dob || '').trim();
 
-  // Validation (PRD §7.4). CNIC required (Q12); full name ≥ 2 chars; father optional.
+  // Validation. CNIC required, name ≥ 2 chars, DOB required (UNSC needs it),
+  // father optional.
   if (!isValidCnic(input.cnic)) {
     throw new HttpError(400, 'CNIC is required and must contain exactly 13 digits.');
   }
   if (fullName.length < 2) {
     throw new HttpError(400, 'Full name is required (minimum 2 characters).');
   }
+  if (!isValidDob(dobRaw)) {
+    throw new HttpError(400, 'Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030).');
+  }
   const cnic = formatCnic(input.cnic);
+  const dob = formatDob(dobRaw); // canonical "DD-MMM-YYYY"
 
   const [nactaList, unscList] = await Promise.all([
     activeList('nacta_lists'),
     activeList('unsc_lists'),
   ]);
 
-  // Run both checks in parallel (PRD §7.4). The matchers query records by
-  // is_active=1 directly (not by list_id) since 2026-06-13. We still gate on
-  // activeList for the audit version label + the "no list uploaded" display.
+  // Run both checks in parallel. NACTA ignores DOB; UNSC requires it for the
+  // strict 3-check (name + year + ID) introduced 2026-06-23.
   const [nactaResult, unscResult] = await Promise.all([
     nactaList ? matchNacta({ cnic, fullName, fatherName }) : Promise.resolve(NO_LIST),
-    unscList ? matchUnsc({ fullName }) : Promise.resolve(NO_LIST),
+    unscList ? matchUnsc({ fullName, cnic, dob }) : Promise.resolve(NO_LIST),
   ]);
 
   const nactaVersion = nactaList ? versionStamp(nactaList.version_label, nactaList.uploaded_at) : null;
@@ -54,14 +61,15 @@ export async function runScreening(user, input) {
   // query() returns the ResultSetHeader directly for INSERT (not wrapped in an array).
   const result = await query(
     `INSERT INTO screenings
-       (screened_by, input_cnic, input_full_name, input_father_name,
+       (screened_by, input_cnic, input_full_name, input_father_name, input_dob,
         nacta_result_json, unsc_result_json, nacta_list_version, unsc_list_version)
-     VALUES (:by, :cnic, :name, :father, :nacta, :unsc, :nv, :uv)`,
+     VALUES (:by, :cnic, :name, :father, :dob, :nacta, :unsc, :nv, :uv)`,
     {
       by: user.id,
       cnic,
       name: fullName,
       father: fatherName || null,
+      dob,
       nacta: JSON.stringify(nactaResult),
       unsc: JSON.stringify(unscResult),
       nv: nactaVersion,
@@ -74,6 +82,7 @@ export async function runScreening(user, input) {
     cnic,
     full_name: fullName,
     father_name: fatherName || null,
+    dob,
     nacta: nactaResult,
     unsc: unscResult,
     nacta_list_version: nactaVersion,
@@ -100,7 +109,7 @@ export async function listHistory({ page = 1, pageSize = 20 } = {}) {
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
 
   const rows = await query(
-    `SELECT id, input_cnic, input_full_name, input_father_name,
+    `SELECT id, input_cnic, input_full_name, input_father_name, input_dob,
             nacta_result_json, unsc_result_json, screened_at
      FROM screenings ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`,
   );
@@ -115,6 +124,7 @@ export async function listHistory({ page = 1, pageSize = 20 } = {}) {
       cnic: r.input_cnic,
       full_name: r.input_full_name,
       father_name: r.input_father_name,
+      dob: r.input_dob,
       screened_at: r.screened_at,
       nacta_matched: asJson(r.nacta_result_json).matched,
       nacta_match_type: asJson(r.nacta_result_json).match_type,

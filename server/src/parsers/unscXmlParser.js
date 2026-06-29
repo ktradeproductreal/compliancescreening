@@ -90,6 +90,15 @@ function dob(ind) {
   return dobs.length ? dobs.join(' | ') : null;
 }
 
+/** Extract every identification number from INDIVIDUAL_DOCUMENT entries. */
+function identificationNumbers(ind) {
+  // INDIVIDUAL_DOCUMENT may be one object or an array. Each carries TYPE_OF_DOCUMENT
+  // (Passport / National identification / Drivers' license etc.) and NUMBER.
+  return asArray(ind.INDIVIDUAL_DOCUMENT)
+    .map((d) => s(d?.NUMBER))
+    .filter(Boolean);
+}
+
 function listedOn(ind) {
   // Prefer LAST_DAY_UPDATED.VALUE if present (most recent amendment); fall back to LISTED_ON.
   const updated = asArray(ind.LAST_DAY_UPDATED?.VALUE).map(s).filter(Boolean);
@@ -156,6 +165,7 @@ export function parseUnscXml(input) {
         listed_on: listedOn(ind),
         original_script_name: s(ind.NAME_ORIGINAL_SCRIPT),
         other_information: s(ind.COMMENTS1) || s(ind.COMMENTS),
+        identification_numbers_json: identificationNumbers(ind),
       });
     } catch (err) {
       parseErrors += 1;

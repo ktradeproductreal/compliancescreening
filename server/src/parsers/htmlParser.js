@@ -62,6 +62,20 @@ function parseAliasBlock(block) {
     .filter((s) => s && s.toLowerCase() !== 'na');
 }
 
+/**
+ * Parse a multi-value ID field like "a) AB12345 b) CD67890 c) na" into a clean
+ * array. Also handles single values ("AB12345"). Strips entries that are "na".
+ */
+function parseIdField(value) {
+  if (!value) return [];
+  // If the value contains "a) ... b) ..." markers, split on them; otherwise
+  // treat the whole string as one value.
+  const parts = /[a-z]\)/i.test(value) ? value.split(/[a-z]\)\s*/i) : [value];
+  return parts
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter((s) => s && s.toLowerCase() !== 'na');
+}
+
 /** Parse the "Name: 1: X 2: Y ..." section into ordered parts (PRD §9.2 c). */
 function parseNameParts(rawText) {
   const m = rawText.match(/Name:\s*1:\s*(.+?)\s*(?:Name \(original|Title:)/s);
@@ -101,6 +115,12 @@ export function parseUnscHtml(buffer) {
       const lowAka = parseAliasBlock(between(rawText, 'Low quality a.k.a.:', 'Nationality:'));
       const aliases = [...goodAka, ...lowAka];
 
+      // Identification numbers — passport + national ID values, combined into one
+      // array for the strict 3-check match against the submitted CNIC.
+      const passportIds = parseIdField(extractField(rawText, 'Passport no'));
+      const nationalIds = parseIdField(extractField(rawText, 'National identification no'));
+      const identificationNumbers = [...passportIds, ...nationalIds];
+
       const record = {
         ref_code: refCode || '(unknown)',
         primary_name: primaryName,
@@ -116,6 +136,7 @@ export function parseUnscHtml(buffer) {
         listed_on: extractField(rawText, 'Listed on'),
         original_script_name: originalScriptName,
         other_information: extractField(rawText, 'Other information'),
+        identification_numbers_json: identificationNumbers,
       };
       records.push(record);
     } catch (err) {

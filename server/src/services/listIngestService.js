@@ -178,6 +178,7 @@ async function ingestUnscInner({ conn, records, filename, userId }) {
          name_parts_json = ?, aliases_json = ?, aliases_normalised_json = ?,
          nationality = ?, address = ?, dob = ?, pob = ?,
          designation = ?, listed_on = ?, original_script_name = ?, other_information = ?,
+         identification_numbers_json = ?,
          is_active = 1
        WHERE id = ?`,
       [
@@ -186,6 +187,7 @@ async function ingestUnscInner({ conn, records, filename, userId }) {
         JSON.stringify(r.aliases_normalised_json),
         r.nationality, r.address, r.dob, r.pob,
         r.designation, r.listed_on, r.original_script_name, r.other_information,
+        JSON.stringify(r.identification_numbers_json || []),
         u.id,
       ],
     );
@@ -197,14 +199,16 @@ async function ingestUnscInner({ conn, records, filename, userId }) {
       listId, r.ref_code, r.primary_name, r.primary_name_normalised,
       JSON.stringify(r.name_parts_json), JSON.stringify(r.aliases_json),
       JSON.stringify(r.aliases_normalised_json), r.nationality, r.address, r.dob, r.pob,
-      r.designation, r.listed_on, r.original_script_name, r.other_information, 1,
+      r.designation, r.listed_on, r.original_script_name, r.other_information,
+      JSON.stringify(r.identification_numbers_json || []), 1,
     ]);
     await conn.query(
       `INSERT INTO unsc_records
          (list_id, ref_code, primary_name, primary_name_normalised,
           name_parts_json, aliases_json, aliases_normalised_json,
           nationality, address, dob, pob,
-          designation, listed_on, original_script_name, other_information, is_active)
+          designation, listed_on, original_script_name, other_information,
+          identification_numbers_json, is_active)
        VALUES ?`,
       [values],
     );

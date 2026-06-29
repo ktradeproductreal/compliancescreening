@@ -81,7 +81,11 @@ function renderUnsc(doc, result, version) {
   doc.font('Helvetica').moveDown(0.3);
 
   if (!status.hit) {
-    doc.text('No entry matching this name or its aliases was found.');
+    // The 3-check rule (name + DOB year + ID) is strict — be clear that NO_MATCH
+    // here means "no entry passes all three" rather than "person not on list."
+    doc.text(
+      'No entry passes the strict three-check (name, year of birth, and identification number) verification.',
+    );
   } else {
     (result.records || []).forEach((r) => {
       doc.moveDown(0.3);
@@ -90,11 +94,12 @@ function renderUnsc(doc, result, version) {
       field(doc, '  Aliases', (r.aliases || []).join('; ') || '—');
       field(doc, '  Date of Birth', r.dob);
       field(doc, '  Nationality', r.nationality);
+      field(doc, '  ID Numbers', (r.identification_numbers || []).join('; ') || '—');
       field(doc, '  Designation', r.designation);
       field(doc, '  Listed on', r.listed_on);
-      field(doc, '  Pakistan Link', r.pakistan_link || 'None identified');
+      if (r.pakistan_link) field(doc, '  Pakistan Link', r.pakistan_link); // informational only
       if (typeof r.match_score === 'number') {
-        field(doc, '  Match Score', `${Math.round(r.match_score * 100)}%`);
+        field(doc, '  Name Match Score', `${Math.round(r.match_score * 100)}%`);
       }
     });
   }
@@ -140,6 +145,7 @@ export function streamReport(res, screening, { disposition = 'inline' } = {}) {
   field(doc, 'Full Name', screening.input_full_name);
   field(doc, "Father's Name", screening.input_father_name);
   field(doc, 'CNIC', screening.input_cnic);
+  field(doc, 'Date of Birth', screening.input_dob);
   doc.moveDown(0.5);
 
   renderNacta(doc, screening.nacta_result_json, screening.nacta_list_version);

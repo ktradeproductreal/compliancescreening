@@ -13,6 +13,8 @@ export async function screenAndReport(req, res) {
     cnic: src.cnic,
     full_name: src.full_name ?? src.fullName ?? src.name,
     father_name: src.father_name ?? src.fatherName ?? '',
+    // DOB required since 2026-06-23 for UNSC matching. Format: dd-MMM-yyyy.
+    dob: src.dob ?? src.date_of_birth ?? src.dateOfBirth ?? '',
   };
 
   // No human user behind an API call → screened_by is null (column is nullable).

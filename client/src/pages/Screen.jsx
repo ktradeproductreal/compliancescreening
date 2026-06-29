@@ -9,6 +9,10 @@ function formatCnicInput(value) {
 }
 const cnicDigits = (value) => value.replace(/\D/g, '');
 
+// ── DOB validation: dd-MMM-yyyy (e.g. 10-JAN-2030) ──────────────────────────
+const DOB_REGEX = /^\d{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\d{4}$/i;
+const isDobValid = (v) => DOB_REGEX.test(v.trim());
+
 // ── Result classification → badge styling ─────────────────────────────────────
 const HIT = { CNIC_MATCH_NAME_CONFIRMED: 1, CONFIRMED_MATCH: 1 };
 const REVIEW = { CNIC_MATCH_NAME_UNCONFIRMED: 1, NAME_ONLY_MATCH: 1, POSSIBLE_MATCH: 1 };
@@ -61,13 +65,15 @@ export default function Screen() {
   const [cnic, setCnic] = useState('');
   const [fullName, setFullName] = useState('');
   const [fatherName, setFatherName] = useState('');
+  const [dob, setDob] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [pdfBusy, setPdfBusy] = useState(false);
 
   const cnicValid = cnicDigits(cnic).length === 13;
-  const canSubmit = cnicValid && fullName.trim().length >= 2 && !busy;
+  const dobValid = isDobValid(dob);
+  const canSubmit = cnicValid && fullName.trim().length >= 2 && dobValid && !busy;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -79,6 +85,7 @@ export default function Screen() {
         cnic,
         full_name: fullName.trim(),
         father_name: fatherName.trim(),
+        dob: dob.trim().toUpperCase(),
       });
       setResult(data);
     } catch (err) {
@@ -133,7 +140,7 @@ export default function Screen() {
           />
         </label>
 
-        <label className="mb-6 block">
+        <label className="mb-4 block">
           <span className="mb-1 block text-sm font-medium text-slate-600">
             Father&apos;s Name <span className="text-slate-400">(optional)</span>
           </span>
@@ -142,6 +149,23 @@ export default function Screen() {
             onChange={(e) => setFatherName(e.target.value)}
             className="w-full rounded border border-slate-300 px-3 py-2 focus:border-brand-600 focus:outline-none"
           />
+        </label>
+
+        <label className="mb-6 block">
+          <span className="mb-1 block text-sm font-medium text-slate-600">
+            Date of Birth <span className="text-slate-400">(required for UNSC match)</span>
+          </span>
+          <input
+            placeholder="10-JAN-2030"
+            value={dob}
+            onChange={(e) => setDob(e.target.value.toUpperCase())}
+            className="w-full rounded border border-slate-300 px-3 py-2 font-mono uppercase focus:border-brand-600 focus:outline-none"
+          />
+          {dob && !dobValid && (
+            <span className="mt-1 block text-xs text-red-600">
+              Format must be dd-MMM-yyyy (e.g. 10-JAN-2030).
+            </span>
+          )}
         </label>
 
         <button

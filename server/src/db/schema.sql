@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS unsc_records (
   listed_on               VARCHAR(512),                -- includes amendment history, e.g. "29 Sep. 2005 (amended on ...)"
   original_script_name    VARCHAR(500),
   other_information       TEXT,
+  identification_numbers_json JSON NULL,        -- array of passport/national-id values used for strict 3-check matching (2026-06-23)
   is_active               TINYINT(1) NOT NULL DEFAULT 1, -- 1 = present in latest upload; 0 = removed (kept for audit)
   CONSTRAINT fk_unsc_records_list FOREIGN KEY (list_id) REFERENCES unsc_lists(id),
   INDEX idx_unsc_list_id (list_id),
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS screenings (
   input_cnic          VARCHAR(15),
   input_full_name     VARCHAR(500) NOT NULL,
   input_father_name   VARCHAR(500),
+  input_dob           VARCHAR(11),                  -- format dd-MMM-yyyy (e.g. "10-JAN-2030"); used for UNSC year match
   nacta_result_json   JSON NOT NULL,
   unsc_result_json    JSON NOT NULL,
   nacta_list_version  VARCHAR(50),
