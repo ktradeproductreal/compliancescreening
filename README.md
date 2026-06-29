@@ -83,11 +83,17 @@ npm run dev          # http://localhost:5173
 
 Log in with the seeded credentials.
 
-## External screening API (`/api/v2/screen`)
+## External screening API
 
-Key-authenticated endpoint that runs a screening and returns the PDF report as a
-**file download**. No JWT/login — auth is the shared `API_KEY` (set in `.env`).
-Available on both `GET` (params in query string) and `POST` (JSON body).
+Two endpoints. The first runs a screening and returns JSON metadata + a public
+URL to the PDF report. The second is that URL — it serves the PDF and needs no
+API key (the 128-bit token in the URL is the auth).
+
+### `POST /api/v2/screen` — run a screening
+
+Auth: shared `API_KEY` env var. Pass via `X-API-Key` header (preferred) or `key`
+query/body param. Both `GET` and `POST` are accepted (POST recommended so CNICs
+stay out of access logs).
 
 | Param         | Required | Notes                                  |
 | ------------- | -------- | -------------------------------------- |
@@ -97,39 +103,55 @@ Available on both `GET` (params in query string) and `POST` (JSON body).
 | `dob`         | yes      | Date of birth in `dd-MMM-yyyy` form (e.g. `10-JAN-2030`). Case insensitive; spaces or dashes work as separators. Aliases: `date_of_birth`, `dateOfBirth`. **Required for UNSC matching** (strict 3-check: name + year of birth + CNIC). |
 | `father_name` | no       | Aliases: `fatherName`.                 |
 
-### Example calls
+**Example:**
 
 ```bash
-# POST (recommended — keeps CNIC/key out of URLs and logs)
 curl -X POST https://34-55-250-189.nip.io/api/v2/screen \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_KEY>" \
   -d '{
     "cnic": "44103-5251752-5",
     "full_name": "ABDUR REHMAN",
-    "father_name": "",
     "dob": "03-OCT-1965"
-  }' \
-  -o report.pdf
-
-# GET (convenient for quick tests; params land in server/proxy access logs)
-curl "https://34-55-250-189.nip.io/api/v2/screen?\
-key=<API_KEY>&cnic=4410352517525&full_name=ABDUR%20REHMAN&dob=03-OCT-1965" \
-  -o report.pdf
+  }'
 ```
 
-### Responses
+**Success response (`200`):**
+
+```json
+{
+  "record_found": "yes",
+  "file_url": "https://34-55-250-189.nip.io/api/v2/reports/8f3c1a7e4b6d8f0a3c5e7090b2d4f6a8.pdf",
+  "screening_id": 123,
+  "screened_at": "2026-06-29T11:32:00.000Z",
+  "nacta_match_type": "NO_MATCH",
+  "unsc_match_type": "CONFIRMED_MATCH"
+}
+```
+
+- `record_found` is `"yes"` when **either** NACTA or UNSC produced a hit, `"no"` when both came back clean.
+- `file_url` is publicly downloadable forever — no extra auth needed. Treat the URL itself as sensitive: anyone with it can fetch the report.
+- `nacta_match_type` / `unsc_match_type` give the per-list outcome:
+  - NACTA: `NO_MATCH` · `CNIC_MATCH_NAME_CONFIRMED` · `CNIC_MATCH_NAME_UNCONFIRMED` · `NAME_ONLY_MATCH` · `NO_LIST_UPLOADED`
+  - UNSC:  `NO_MATCH` · `CONFIRMED_MATCH` · `POSSIBLE_MATCH` · `NO_LIST_UPLOADED`
+
+**Error responses:**
 
 | Status | Body | Meaning |
 |---|---|---|
-| `200` | PDF (`Content-Disposition: attachment; filename="SCR-NNNNNN.pdf"`) | Screening ran; PDF includes both NACTA and UNSC outcomes |
-| `400` | JSON `{ "error": "Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030)." }` | Missing or malformed input |
-| `401` | JSON `{ "error": "Invalid or missing API key." }` | Bad/missing key |
-| `503` | JSON `{ "error": "External API is not configured (set API_KEY on the server)." }` | `API_KEY` env not set |
+| `400` | `{ "error": "Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030)." }` | Missing or malformed input |
+| `401` | `{ "error": "Invalid or missing API key." }` | Bad/missing key |
+| `429` | `{ "error": "Rate limit exceeded for the external API." }` | Currently capped at 60 calls / 5 min / IP |
+| `503` | `{ "error": "External API is not configured (set API_KEY on the server)." }` | `API_KEY` env not set |
 
-Every call (including failed validations) is persisted in the `screenings` table
-for audit with `screened_by = NULL` so cron-driven or API-driven screenings are
-distinguishable from UI screenings.
+### `GET /api/v2/reports/<token>.pdf` — the report
+
+Public endpoint. Returns `application/pdf` (Content-Disposition: `inline`). The
+token is 32 hex chars (128 bits of entropy) so the URL is unguessable by brute
+force. The URL is valid as long as the screening row exists in the DB.
+
+Anything other than a valid 32-hex token returns `404 Report not found.` — same
+response as a real-but-missing token, so attackers can't enumerate.
 
 ### Notes on matching behaviour
 
@@ -137,6 +159,12 @@ distinguishable from UI screenings.
 - **UNSC** uses the strict 3-check (name + year-of-birth + CNIC). All three must
   match positively or the report says NO RECORD FOUND. UNSC records without a
   CNIC stored never match (most don't — the customer base is Pakistani only).
+
+### Audit
+
+Every call (including failed validations) is persisted in the `screenings`
+table with `screened_by = NULL` (API-driven, no human user). Each screening
+gets its own `report_token` so the PDF URL is always retrievable by ID lookup.
 
 ## Production (Phase 2 — GCP VM)
 

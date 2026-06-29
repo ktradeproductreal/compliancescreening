@@ -326,7 +326,9 @@ NACTA_FORCE_DOWNLOAD=1 npm run sync:nacta
 - External screening API: `POST https://34-55-250-189.nip.io/api/v2/screen`
   (auth via `X-API-Key` header or `key=` parameter — value in `server/.env`).
   Required params: `cnic`, `full_name`, `dob` (format `10-JAN-2030`). Optional: `father_name`.
-  Returns a PDF report as a file download. See README for full request/response details.
+  Returns JSON `{ record_found, file_url, screening_id, screened_at, ... }`.
+  The PDF lives at `https://34-55-250-189.nip.io/api/v2/reports/<32-hex>.pdf` —
+  public URL secured by the unguessable token. See README for full reference.
 - GitHub repo: <https://github.com/ktradeproductreal/compliancescreening>
 - GCP Console: <https://console.cloud.google.com> → Compute Engine → VM `compliance-screening`
 - aaPanel: `https://34.55.250.189:23079/e4637892` (credentials in password manager)

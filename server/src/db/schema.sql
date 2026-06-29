@@ -117,7 +117,9 @@ CREATE TABLE IF NOT EXISTS screenings (
   unsc_result_json    JSON NOT NULL,
   nacta_list_version  VARCHAR(50),
   unsc_list_version   VARCHAR(50),
+  report_token        VARCHAR(64) NULL,           -- 32-hex random; auth for the public /api/v2/reports/<token>.pdf URL
   screened_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_screenings_user FOREIGN KEY (screened_by) REFERENCES users(id),
+  UNIQUE KEY uq_screenings_report_token (report_token),
   INDEX idx_screenings_date (screened_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

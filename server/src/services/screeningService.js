@@ -4,10 +4,20 @@
 import { query, queryOne } from '../db/db.js';
 import { matchNacta } from '../matching/nactaMatcher.js';
 import { matchUnsc } from '../matching/unscMatcher.js';
+import crypto from 'node:crypto';
 import { isValidCnic, formatCnic } from '../utils/cnic.js';
 import { isValidDob, formatDob } from '../utils/dob.js';
 import { versionStamp } from '../utils/dates.js';
 import { HttpError } from '../utils/asyncHandler.js';
+
+/**
+ * Generate the 128-bit random token that secures the public report URL
+ * (/api/v2/reports/<token>.pdf). 32 hex chars = 16 bytes of crypto entropy
+ * — unguessable by brute force.
+ */
+function generateReportToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
 
 const NO_LIST = { matched: false, match_type: 'NO_LIST_UPLOADED', records: [] };
 
@@ -58,12 +68,17 @@ export async function runScreening(user, input) {
   const nactaVersion = nactaList ? versionStamp(nactaList.version_label, nactaList.uploaded_at) : null;
   const unscVersion = unscList ? versionStamp(unscList.version_label, unscList.uploaded_at) : null;
 
+  // Every screening gets its own opaque public-URL token, even UI screenings.
+  // UI flow ignores it; API flow returns it as part of file_url.
+  const reportToken = generateReportToken();
+
   // query() returns the ResultSetHeader directly for INSERT (not wrapped in an array).
   const result = await query(
     `INSERT INTO screenings
        (screened_by, input_cnic, input_full_name, input_father_name, input_dob,
-        nacta_result_json, unsc_result_json, nacta_list_version, unsc_list_version)
-     VALUES (:by, :cnic, :name, :father, :dob, :nacta, :unsc, :nv, :uv)`,
+        nacta_result_json, unsc_result_json, nacta_list_version, unsc_list_version,
+        report_token)
+     VALUES (:by, :cnic, :name, :father, :dob, :nacta, :unsc, :nv, :uv, :token)`,
     {
       by: user.id,
       cnic,
@@ -74,6 +89,7 @@ export async function runScreening(user, input) {
       unsc: JSON.stringify(unscResult),
       nv: nactaVersion,
       uv: unscVersion,
+      token: reportToken,
     },
   );
 
@@ -87,6 +103,28 @@ export async function runScreening(user, input) {
     unsc: unscResult,
     nacta_list_version: nactaVersion,
     unsc_list_version: unscVersion,
+    report_token: reportToken,
+  };
+}
+
+/**
+ * Look up a screening by its public report_token. Used by the unauthenticated
+ * /api/v2/reports/<token>.pdf URL. Throws 404 for missing / invalid tokens so
+ * scanners can't tell whether a guessed token "exists somewhere."
+ */
+export async function getScreeningByToken(token) {
+  if (!token || typeof token !== 'string') {
+    throw new HttpError(404, 'Report not found.');
+  }
+  const row = await queryOne(
+    'SELECT * FROM screenings WHERE report_token = :token LIMIT 1',
+    { token },
+  );
+  if (!row) throw new HttpError(404, 'Report not found.');
+  return {
+    ...row,
+    nacta_result_json: asJson(row.nacta_result_json),
+    unsc_result_json: asJson(row.unsc_result_json),
   };
 }
 
