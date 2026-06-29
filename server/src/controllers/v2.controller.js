@@ -24,6 +24,34 @@ function buildReportUrl(req, token) {
   return `${proto}://${host}/api/v2/reports/${token}.pdf`;
 }
 
+/**
+ * Build the canonical /api/v2/screen response. Same shape ALWAYS — on success
+ * the result fields are populated; on error they're null and `error` carries
+ * the message. Consumers can rely on every documented field always being
+ * present in the JSON (with null for "not applicable").
+ */
+export function v2ScreenResponse({
+  success,
+  recordFound = null,
+  fileUrl = null,
+  screeningId = null,
+  screenedAt = null,
+  nactaMatchType = null,
+  unscMatchType = null,
+  error = null,
+}) {
+  return {
+    success,
+    record_found: success ? (recordFound ? 'yes' : 'no') : null,
+    file_url: fileUrl,
+    screening_id: screeningId,
+    screened_at: screenedAt,
+    nacta_match_type: nactaMatchType,
+    unsc_match_type: unscMatchType,
+    error,
+  };
+}
+
 /** POST | GET /api/v2/screen — runs screening, returns JSON. */
 export async function screenAndReport(req, res) {
   const src = { ...req.query, ...req.body };
@@ -44,14 +72,17 @@ export async function screenAndReport(req, res) {
   // NO_LIST_UPLOADED leave matched=false.
   const recordFound = !!(result.nacta?.matched || result.unsc?.matched);
 
-  res.status(200).json({
-    record_found: recordFound ? 'yes' : 'no',
-    file_url: buildReportUrl(req, result.report_token),
-    screening_id: result.id,
-    screened_at: new Date().toISOString(),
-    nacta_match_type: result.nacta?.match_type ?? null,
-    unsc_match_type: result.unsc?.match_type ?? null,
-  });
+  res.status(200).json(
+    v2ScreenResponse({
+      success: true,
+      recordFound,
+      fileUrl: buildReportUrl(req, result.report_token),
+      screeningId: result.id,
+      screenedAt: new Date().toISOString(),
+      nactaMatchType: result.nacta?.match_type ?? null,
+      unscMatchType: result.unsc?.match_type ?? null,
+    }),
+  );
 }
 
 /**

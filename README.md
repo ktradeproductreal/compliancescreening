@@ -116,33 +116,61 @@ curl -X POST https://34-55-250-189.nip.io/api/v2/screen \
   }'
 ```
 
+**Response shape — same in every case (success, validation error, auth error, rate-limit, server error).** Just the field values change, never the keys. The HTTP status code carries the outcome category; the JSON body lets you parse one consistent shape.
+
+```jsonc
+{
+  "success": true | false,                // discriminator — easiest field to branch on
+  "record_found": "yes" | "no" | null,    // null when success=false
+  "file_url": "https://.../reports/<token>.pdf" | null,
+  "screening_id": 123 | null,
+  "screened_at": "2026-06-29T11:32:00.000Z" | null,
+  "nacta_match_type": "NO_MATCH" | "CNIC_MATCH_NAME_CONFIRMED" | "CNIC_MATCH_NAME_UNCONFIRMED" | "NAME_ONLY_MATCH" | "NO_LIST_UPLOADED" | null,
+  "unsc_match_type":  "NO_MATCH" | "CONFIRMED_MATCH" | "POSSIBLE_MATCH" | "NO_LIST_UPLOADED" | null,
+  "error": "human-readable message" | null  // populated only when success=false
+}
+```
+
 **Success response (`200`):**
 
 ```json
 {
+  "success": true,
   "record_found": "yes",
   "file_url": "https://34-55-250-189.nip.io/api/v2/reports/8f3c1a7e4b6d8f0a3c5e7090b2d4f6a8.pdf",
   "screening_id": 123,
   "screened_at": "2026-06-29T11:32:00.000Z",
   "nacta_match_type": "NO_MATCH",
-  "unsc_match_type": "CONFIRMED_MATCH"
+  "unsc_match_type": "CONFIRMED_MATCH",
+  "error": null
 }
 ```
 
 - `record_found` is `"yes"` when **either** NACTA or UNSC produced a hit, `"no"` when both came back clean.
 - `file_url` is publicly downloadable forever — no extra auth needed. Treat the URL itself as sensitive: anyone with it can fetch the report.
-- `nacta_match_type` / `unsc_match_type` give the per-list outcome:
-  - NACTA: `NO_MATCH` · `CNIC_MATCH_NAME_CONFIRMED` · `CNIC_MATCH_NAME_UNCONFIRMED` · `NAME_ONLY_MATCH` · `NO_LIST_UPLOADED`
-  - UNSC:  `NO_MATCH` · `CONFIRMED_MATCH` · `POSSIBLE_MATCH` · `NO_LIST_UPLOADED`
 
-**Error responses:**
+**Error responses — same shape, different status code:**
 
-| Status | Body | Meaning |
+```json
+{
+  "success": false,
+  "record_found": null,
+  "file_url": null,
+  "screening_id": null,
+  "screened_at": null,
+  "nacta_match_type": null,
+  "unsc_match_type": null,
+  "error": "Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030)."
+}
+```
+
+| Status | Common `error` messages | Meaning |
 |---|---|---|
-| `400` | `{ "error": "Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030)." }` | Missing or malformed input |
-| `401` | `{ "error": "Invalid or missing API key." }` | Bad/missing key |
-| `429` | `{ "error": "Rate limit exceeded for the external API." }` | Currently capped at 60 calls / 5 min / IP |
-| `503` | `{ "error": "External API is not configured (set API_KEY on the server)." }` | `API_KEY` env not set |
+| `400` | `"Date of birth is required..."` / `"CNIC is required and must contain exactly 13 digits."` / `"Full name is required (minimum 2 characters)."` | Missing or malformed input |
+| `401` | `"Invalid or missing API key."` | Bad/missing key |
+| `429` | `"Rate limit exceeded for the external API."` | Currently capped at 60 calls / 5 min / IP |
+| `503` | `"External API is not configured (set API_KEY on the server)."` | `API_KEY` env not set |
+| `500` | `"Internal server error"` (generic, details in server logs) | Unexpected backend failure |
 
 ### `GET /api/v2/reports/<token>.pdf` — the report
 
