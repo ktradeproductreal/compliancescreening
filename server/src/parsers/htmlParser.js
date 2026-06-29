@@ -3,6 +3,7 @@
 // Phase 1 parses individuals only (Q11). Nothing is written to disk.
 import * as cheerio from 'cheerio';
 import { normalise } from '../matching/normalise.js';
+import { extractCnics } from '../utils/cnic.js';
 
 // All field labels that may appear in an entry, in their natural document order.
 // extractField() captures the text between a label and whichever label comes next.
@@ -62,19 +63,6 @@ function parseAliasBlock(block) {
     .filter((s) => s && s.toLowerCase() !== 'na');
 }
 
-/**
- * Parse a multi-value ID field like "a) AB12345 b) CD67890 c) na" into a clean
- * array. Also handles single values ("AB12345"). Strips entries that are "na".
- */
-function parseIdField(value) {
-  if (!value) return [];
-  // If the value contains "a) ... b) ..." markers, split on them; otherwise
-  // treat the whole string as one value.
-  const parts = /[a-z]\)/i.test(value) ? value.split(/[a-z]\)\s*/i) : [value];
-  return parts
-    .map((s) => s.replace(/\s+/g, ' ').trim())
-    .filter((s) => s && s.toLowerCase() !== 'na');
-}
 
 /** Parse the "Name: 1: X 2: Y ..." section into ordered parts (PRD §9.2 c). */
 function parseNameParts(rawText) {
@@ -115,11 +103,11 @@ export function parseUnscHtml(buffer) {
       const lowAka = parseAliasBlock(between(rawText, 'Low quality a.k.a.:', 'Nationality:'));
       const aliases = [...goodAka, ...lowAka];
 
-      // Identification numbers — passport + national ID values, combined into one
-      // array for the strict 3-check match against the submitted CNIC.
-      const passportIds = parseIdField(extractField(rawText, 'Passport no'));
-      const nationalIds = parseIdField(extractField(rawText, 'National identification no'));
-      const identificationNumbers = [...passportIds, ...nationalIds];
+      // CNICs only (Pakistani customer base — passport / foreign IDs are noise).
+      // Scan the entire raw entry text for CNIC-shaped values; extractCnics
+      // returns canonical XXXXX-XXXXXXX-X form, deduplicated. Most UNSC entries
+      // won't yield any (which is fine — they'll never match a CNIC screening).
+      const identificationNumbers = extractCnics(rawText);
 
       const record = {
         ref_code: refCode || '(unknown)',

@@ -8,6 +8,7 @@
 // Phase 1 still only screens INDIVIDUALS (Q11). ENTITIES are skipped.
 import { XMLParser } from 'fast-xml-parser';
 import { normalise } from '../matching/normalise.js';
+import { extractCnics } from '../utils/cnic.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -90,13 +91,23 @@ function dob(ind) {
   return dobs.length ? dobs.join(' | ') : null;
 }
 
-/** Extract every identification number from INDIVIDUAL_DOCUMENT entries. */
+/**
+ * Extract CNICs from an individual's documents.
+ *
+ * We scan EVERY field on each INDIVIDUAL_DOCUMENT (not just NUMBER) because the
+ * UN feed occasionally tucks the digits into NOTE / DATE_OF_ISSUE / TYPE strings.
+ * Then extractCnics() filters by shape so only Pakistani CNICs survive — passport
+ * numbers ("CV9157521"), foreign IDs, and free text are discarded.
+ */
 function identificationNumbers(ind) {
-  // INDIVIDUAL_DOCUMENT may be one object or an array. Each carries TYPE_OF_DOCUMENT
-  // (Passport / National identification / Drivers' license etc.) and NUMBER.
-  return asArray(ind.INDIVIDUAL_DOCUMENT)
-    .map((d) => s(d?.NUMBER))
-    .filter(Boolean);
+  const cnics = new Set();
+  for (const doc of asArray(ind.INDIVIDUAL_DOCUMENT)) {
+    if (!doc) continue;
+    // Flatten every text-bearing value on this document into one searchable blob.
+    const blob = Object.values(doc).filter((v) => typeof v === 'string').join(' ');
+    for (const cnic of extractCnics(blob)) cnics.add(cnic);
+  }
+  return Array.from(cnics);
 }
 
 function listedOn(ind) {
