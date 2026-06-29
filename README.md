@@ -93,24 +93,50 @@ Available on both `GET` (params in query string) and `POST` (JSON body).
 | ------------- | -------- | -------------------------------------- |
 | `key`         | yes      | Must equal `API_KEY`. May instead be sent as the `X-API-Key` header. |
 | `cnic`        | yes      | 13 digits (dashes optional).           |
-| `full_name`   | yes      | Min 2 chars. (`name` also accepted.)   |
-| `father_name` | no       |                                        |
+| `full_name`   | yes      | Min 2 chars. Aliases: `name`, `fullName`. |
+| `dob`         | yes      | Date of birth in `dd-MMM-yyyy` form (e.g. `10-JAN-2030`). Case insensitive; spaces or dashes work as separators. Aliases: `date_of_birth`, `dateOfBirth`. **Required for UNSC matching** (strict 3-check: name + year of birth + CNIC). |
+| `father_name` | no       | Aliases: `fatherName`.                 |
+
+### Example calls
 
 ```bash
 # POST (recommended — keeps CNIC/key out of URLs and logs)
-curl -X POST http://localhost:4000/api/v2/screen \
+curl -X POST https://34-55-250-189.nip.io/api/v2/screen \
   -H "Content-Type: application/json" \
   -H "X-API-Key: <API_KEY>" \
-  -d '{"cnic":"42101-1234567-1","full_name":"MUHAMMAD ALI","father_name":"GHULAM HASSAN"}' \
+  -d '{
+    "cnic": "44103-5251752-5",
+    "full_name": "ABDUR REHMAN",
+    "father_name": "",
+    "dob": "03-OCT-1965"
+  }' \
   -o report.pdf
 
-# GET (convenient, but params land in server/proxy logs)
-curl "http://localhost:4000/api/v2/screen?key=<API_KEY>&cnic=4210112345671&full_name=MUHAMMAD%20ALI" -o report.pdf
+# GET (convenient for quick tests; params land in server/proxy access logs)
+curl "https://34-55-250-189.nip.io/api/v2/screen?\
+key=<API_KEY>&cnic=4410352517525&full_name=ABDUR%20REHMAN&dob=03-OCT-1965" \
+  -o report.pdf
 ```
 
-Responses: `200` PDF (`Content-Disposition: attachment`); `400` invalid input;
-`401` bad/missing key; `503` if `API_KEY` is unset. Each call is persisted to
-`screenings` for audit with `screened_by = NULL` (no human user).
+### Responses
+
+| Status | Body | Meaning |
+|---|---|---|
+| `200` | PDF (`Content-Disposition: attachment; filename="SCR-NNNNNN.pdf"`) | Screening ran; PDF includes both NACTA and UNSC outcomes |
+| `400` | JSON `{ "error": "Date of birth is required in the format dd-MMM-yyyy (e.g. 10-JAN-2030)." }` | Missing or malformed input |
+| `401` | JSON `{ "error": "Invalid or missing API key." }` | Bad/missing key |
+| `503` | JSON `{ "error": "External API is not configured (set API_KEY on the server)." }` | `API_KEY` env not set |
+
+Every call (including failed validations) is persisted in the `screenings` table
+for audit with `screened_by = NULL` so cron-driven or API-driven screenings are
+distinguishable from UI screenings.
+
+### Notes on matching behaviour
+
+- **NACTA** ignores `dob` — matches on CNIC + name + father per the existing two-level rule.
+- **UNSC** uses the strict 3-check (name + year-of-birth + CNIC). All three must
+  match positively or the report says NO RECORD FOUND. UNSC records without a
+  CNIC stored never match (most don't — the customer base is Pakistani only).
 
 ## Production (Phase 2 — GCP VM)
 

@@ -324,7 +324,9 @@ NACTA_FORCE_DOWNLOAD=1 npm run sync:nacta
 - Live portal: <https://34-55-250-189.nip.io>
 - Health check: <https://34-55-250-189.nip.io/api/health>
 - External screening API: `POST https://34-55-250-189.nip.io/api/v2/screen`
-  (requires `X-API-Key` header or `key=` parameter — value is in `server/.env`)
+  (auth via `X-API-Key` header or `key=` parameter — value in `server/.env`).
+  Required params: `cnic`, `full_name`, `dob` (format `10-JAN-2030`). Optional: `father_name`.
+  Returns a PDF report as a file download. See README for full request/response details.
 - GitHub repo: <https://github.com/ktradeproductreal/compliancescreening>
 - GCP Console: <https://console.cloud.google.com> → Compute Engine → VM `compliance-screening`
 - aaPanel: `https://34.55.250.189:23079/e4637892` (credentials in password manager)
