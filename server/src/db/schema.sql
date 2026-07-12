@@ -106,6 +106,30 @@ CREATE TABLE IF NOT EXISTS sync_log (
   INDEX idx_sync_log_source_started (source, started_at DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Per-record audit trail. One row per action a sync takes (an "added", a
+-- "deactivated", a duplicate drop, etc.) so compliance can answer questions
+-- like "what CNIC was dropped on YYYY-MM-DD and why?" via a single query.
+-- Only CHANGES + DROPS are recorded — never kept rows (would explode volume).
+CREATE TABLE IF NOT EXISTS sync_events (
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  sync_log_id         INT NULL,               -- link to the sync_log run; NULL for manual UI ingestion
+  source              VARCHAR(20) NOT NULL,   -- 'nacta' | 'unsc'
+  event_type          VARCHAR(30) NOT NULL,   -- 'added' | 'deactivated' | 'reactivated' | 'duplicate_in_file' | 'warning' | 'skipped'
+  row_number          INT NULL,               -- row number in the source file (1-based) — where this event originated
+  cnic                VARCHAR(15) NULL,       -- normalised CNIC involved (if any)
+  full_name           VARCHAR(500) NULL,      -- raw display name
+  father_name         VARCHAR(500) NULL,      -- raw father name
+  ref_code            VARCHAR(50) NULL,       -- UNSC ref code (if UNSC event)
+  existing_record_id  INT NULL,               -- id of the DB record affected (for deactivated/reactivated)
+  detail              TEXT NULL,              -- freeform note (e.g. "matches row 47 of this file")
+  created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sync_events_log FOREIGN KEY (sync_log_id) REFERENCES sync_log(id) ON DELETE CASCADE,
+  INDEX idx_sync_events_log (sync_log_id),
+  INDEX idx_sync_events_source_type (source, event_type),
+  INDEX idx_sync_events_cnic (cnic),
+  INDEX idx_sync_events_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS screenings (
   id                  INT AUTO_INCREMENT PRIMARY KEY,
   screened_by         INT NULL,                  -- NULL = external API screening (no human user)

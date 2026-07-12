@@ -19,7 +19,7 @@ import fs from 'node:fs/promises';
 import { config } from '../config/env.js';
 import { parseNactaExcel } from '../parsers/excelParser.js';
 import { ingestNacta } from '../services/listIngestService.js';
-import { readState, writeState, runSync } from './_runSync.js';
+import { readState, writeState, runSync, logEvents } from './_runSync.js';
 
 const URL = process.env.NACTA_URL || 'https://nfs.nacta.gov.pk/';
 // 3-minute default: the Blazor SignalR data load can be slow over long-haul links.
@@ -144,7 +144,7 @@ async function exportExcel(page) {
   return buf;
 }
 
-await runSync('nacta', async () => {
+await runSync('nacta', async (logId) => {
   const { browser, page, count } = await openAndScrape();
   try {
     // Skip-if-unchanged guard.
@@ -158,7 +158,7 @@ await runSync('nacta', async () => {
     const buf = await exportExcel(page);
 
     console.log('[nacta] parsing Excel ...');
-    const { records, skipped, warnings } = parseNactaExcel(buf);
+    const { records, skipped, warnings, structuredWarnings } = parseNactaExcel(buf);
     if (records.length === 0) throw new Error('NACTA Excel parsed to zero records');
 
     const userId = Number(process.env.LIST_SYNC_USER_ID || config.seed?.userId || 1);
@@ -169,6 +169,12 @@ await runSync('nacta', async () => {
       userId,
     });
 
+    // Per-record audit — writes to sync_events + emits descriptive stdout lines
+    // (which land in aaPanel's Cron Logs, so compliance can read raw evidence).
+    const allEvents = [...(structuredWarnings || []), ...(result.events || [])];
+    console.log(`[nacta] recording ${allEvents.length} audit events ...`);
+    await logEvents(logId, 'nacta', allEvents);
+
     await writeState('nacta', { last_count: count });
 
     return {
@@ -178,6 +184,7 @@ await runSync('nacta', async () => {
         page_count: count,
         skipped_rows: skipped,
         warnings_count: warnings.length,
+        events_recorded: allEvents.length,
       },
     };
   } finally {

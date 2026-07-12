@@ -73,7 +73,8 @@ export function parseNactaExcel(buffer) {
   }
 
   const records = [];
-  const warnings = [];
+  const warnings = [];        // human-readable strings for the response body
+  const structuredWarnings = []; // structured objects for sync_events audit
   let skipped = 0;
   let withoutCnic = 0;
 
@@ -90,6 +91,14 @@ export function parseNactaExcel(buffer) {
     if (!rawFullName) {
       skipped += 1;
       warnings.push(`Row ${i + 1}: missing NAME — row skipped.`);
+      structuredWarnings.push({
+        event_type: 'skipped',
+        row_number: i + 1,
+        cnic: null,
+        full_name: null,
+        father_name: rawFatherName || null,
+        detail: 'Missing NAME — row skipped.',
+      });
       continue;
     }
 
@@ -104,6 +113,14 @@ export function parseNactaExcel(buffer) {
         warnings.push(
           `Row ${i + 1}: CNIC "${rawCnic}" is not 13 digits — stored without CNIC (name-only record).`,
         );
+        structuredWarnings.push({
+          event_type: 'warning',
+          row_number: i + 1,
+          cnic: null,
+          full_name: rawFullName,
+          father_name: rawFatherName || null,
+          detail: `Malformed CNIC "${rawCnic}" (${digitsOnly(rawCnic).length} digits) — record stored as name-only.`,
+        });
       }
     }
 
@@ -114,8 +131,16 @@ export function parseNactaExcel(buffer) {
       raw_full_name: rawFullName,
       raw_father_name: rawFatherName,
       raw_cnic: rawCnic || null,
+      row_number: i + 1, // 1-based Excel row number for audit
     });
   }
 
-  return { records, skipped, withoutCnic, warnings, totalRows: rows.length - headerRowIndex - 1 };
+  return {
+    records,
+    skipped,
+    withoutCnic,
+    warnings,
+    structuredWarnings,   // audit-ready form (each has event_type/row_number/etc)
+    totalRows: rows.length - headerRowIndex - 1,
+  };
 }

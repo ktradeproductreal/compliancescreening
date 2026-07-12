@@ -24,16 +24,32 @@ function nactaKey(r) {
 // ─── NACTA ingest ────────────────────────────────────────────────────────────
 
 async function ingestNactaInner({ conn, records, filename, userId }) {
+  // Per-record audit events collected throughout the ingest and returned to the
+  // caller (which persists them to sync_events + logs them to stdout).
+  const events = [];
+
   // 1. Dedupe within the incoming file (first occurrence wins).
   const incomingByKey = new Map();
+  const firstRowByKey = new Map();
   let duplicatesInFile = 0;
   for (const r of records) {
     const k = nactaKey(r);
     if (incomingByKey.has(k)) {
       duplicatesInFile += 1;
+      events.push({
+        event_type: 'duplicate_in_file',
+        row_number: r.row_number ?? null,
+        cnic: r.cnic,
+        full_name: r.raw_full_name,
+        father_name: r.raw_father_name,
+        detail: r.cnic
+          ? `Same CNIC + name as row ${firstRowByKey.get(k)} in this file — second occurrence dropped.`
+          : `Same name + father as row ${firstRowByKey.get(k)} in this file — second occurrence dropped (CNIC-less record).`,
+      });
       continue;
     }
     incomingByKey.set(k, r);
+    firstRowByKey.set(k, r.row_number ?? null);
   }
 
   // 2. Compute next list version + flip list-metadata active flag.
@@ -63,18 +79,49 @@ async function ingestNactaInner({ conn, records, filename, userId }) {
     const hit = existingByKey.get(key);
     if (hit) {
       matchedExistingIds.add(hit.id);
-      if (!hit.is_active) toActivate.push(hit.id);
+      if (!hit.is_active) {
+        toActivate.push(hit.id);
+        events.push({
+          event_type: 'reactivated',
+          row_number: incoming.row_number ?? null,
+          cnic: incoming.cnic,
+          full_name: incoming.raw_full_name,
+          father_name: incoming.raw_father_name,
+          existing_record_id: hit.id,
+          detail: `Existing DB record #${hit.id} was inactive; reappeared in this upload — reactivated.`,
+        });
+      }
     } else {
       toInsert.push(incoming);
+      events.push({
+        event_type: 'added',
+        row_number: incoming.row_number ?? null,
+        cnic: incoming.cnic,
+        full_name: incoming.raw_full_name,
+        father_name: incoming.raw_father_name,
+        detail: incoming.cnic
+          ? `New person — no prior DB record with CNIC ${incoming.cnic}.`
+          : 'New person — no prior DB record with this name/father (CNIC-less).',
+      });
     }
   }
 
   // 5. Deactivate rows that were active but no longer appear.
-  const toDeactivateIds = existing
-    .filter((r) => r.is_active && !matchedExistingIds.has(r.id))
-    .map((r) => r.id);
+  const deactivatedRows = existing.filter((r) => r.is_active && !matchedExistingIds.has(r.id));
+  const toDeactivateIds = deactivatedRows.map((r) => r.id);
   if (toDeactivateIds.length > 0) {
     await conn.query('UPDATE nacta_records SET is_active = 0 WHERE id IN (?)', [toDeactivateIds]);
+    for (const r of deactivatedRows) {
+      events.push({
+        event_type: 'deactivated',
+        row_number: null,
+        cnic: r.cnic,
+        full_name: r.full_name,
+        father_name: r.father_name,
+        existing_record_id: r.id,
+        detail: `DB record #${r.id} not present in current upload — marked inactive (kept in DB for audit).`,
+      });
+    }
   }
 
   // 6. Reactivate rows that reappear.
@@ -105,6 +152,7 @@ async function ingestNactaInner({ conn, records, filename, userId }) {
   return {
     listId,
     version,
+    events, // per-record audit events for sync_events + stdout
     stats: {
       total_active: totalActive,
       added: toInsert.length,
