@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS sync_events (
   sync_log_id         INT NULL,               -- link to the sync_log run; NULL for manual UI ingestion
   source              VARCHAR(20) NOT NULL,   -- 'nacta' | 'unsc'
   event_type          VARCHAR(30) NOT NULL,   -- 'added' | 'deactivated' | 'reactivated' | 'duplicate_in_file' | 'warning' | 'skipped'
-  row_number          INT NULL,               -- row number in the source file (1-based) — where this event originated
+  `row_number`        INT NULL,               -- row number in the source file (1-based); backticked because MySQL 8 reserves ROW_NUMBER as a window function
   cnic                VARCHAR(15) NULL,       -- normalised CNIC involved (if any)
   full_name           VARCHAR(500) NULL,      -- raw display name
   father_name         VARCHAR(500) NULL,      -- raw father name

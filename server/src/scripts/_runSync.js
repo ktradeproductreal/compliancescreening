@@ -113,8 +113,9 @@ export async function logEvents(syncLogId, source, events) {
     e.detail ?? null,
   ]);
   await pool.query(
+    // row_number is backticked because MySQL 8 reserves ROW_NUMBER (window function).
     `INSERT INTO sync_events
-       (sync_log_id, source, event_type, row_number,
+       (sync_log_id, source, event_type, \`row_number\`,
         cnic, full_name, father_name, ref_code, existing_record_id, detail)
      VALUES ?`,
     [values],
