@@ -1,22 +1,24 @@
-// UNSC matching engine — STRICT 3-CHECK MODE (changed 2026-06-23 per requirement).
+// UNSC matching engine — SCORED 3-CHECK MODE (changed 2026-07-13 per user request).
 //
-// Tightening rationale: customer base is Pakistani-only, so we now require
-// EVERY one of these three independent checks to pass before returning a hit:
+// Same three inputs (name, DOB year, ID/CNIC) but now graded instead of pass/fail.
+// Name matching is MANDATORY (token-AND fuzzy). Once name matches, we count how
+// many corroborating checks positively pass (each contributes 0 or 1):
 //
-//   1. NAME match     — same token-AND fuzzy logic as before (no change).
-//   2. DOB YEAR match — submitted DOB's year must appear in the UNSC record's
-//                       dob field (UNSC records often only have year info).
-//   3. ID match       — submitted CNIC digits must match one of the UNSC record's
-//                       identification_numbers_json entries (passports / national
-//                       IDs / etc). If the UNSC record has NO ID, the check fails.
+//   • DOB check positive: submitted year is in the UNSC record's extractYears(dob).
+//     Null / missing dob on record → 0 (not a positive).
+//   • CNIC check positive: submitted CNIC (canonical digits) matches one of the
+//     UNSC record's identification_numbers_json entries.
+//     Null / empty ID list on record → 0 (not a positive).
 //
-// "If 2 of 3 match it's still NO_MATCH" — explicitly required by user.
-// The previous "Pakistan-relevance" filter is REMOVED.
+// Classification (corroboratingCount = 0..2 after name passes):
+//   • 2 → CONFIRMED_MATCH  (all three align — high-confidence hit)
+//   • 1 → POSSIBLE_MATCH   (partial — name + one other; needs manual review)
+//   • 0 → NO_MATCH         (name alone is too weak, not surfaced)
 //
-// Compliance trade-off: this is high-precision / low-recall. In practice the UNSC
-// list rarely has Pakistani CNICs as IDs, so most genuine sanctions hits won't
-// surface. The compliance officer should treat UNSC NO_MATCH as "no entry with a
-// matching ID" — not "person definitively not on the UN list."
+// Under this model a UNSC record with BOTH null DOB and null ID is effectively
+// unmatchable (nothing to corroborate a name hit). That's intentional — matches
+// on name alone against records with no verifiable identifiers would be pure
+// noise for a Pakistani-only customer base.
 import { query } from '../db/db.js';
 import { normaliseForUnsc } from './normalise.js';
 import { config } from '../config/env.js';
@@ -132,7 +134,7 @@ export async function matchUnsc({ fullName, cnic, dob }) {
 
   const hits = [];
   for (const row of rows) {
-    // ── CHECK 1: NAME (token-AND across primary + aliases) ──
+    // ── CHECK 1: NAME (mandatory) — token-AND across primary + aliases ──
     const candidates = [row.primary_name_normalised, ...asArray(row.aliases_normalised_json)];
     let nameSim = 0;
     for (const c of candidates) {
@@ -141,34 +143,50 @@ export async function matchUnsc({ fullName, cnic, dob }) {
     }
     if (nameSim < MIN_SIMILARITY) continue;
 
-    // ── CHECK 2: DOB YEAR ──
-    // UNSC records often store only year (or year ranges). Submitted DOB's year
-    // must appear in the extracted year set.
+    // ── CHECK 2 (corroborating): DOB year ──
+    // Positive only if the record has extractable years AND the submitted year
+    // is among them. Null/missing dob → 0 corroborating.
     const years = extractYears(row.dob);
-    if (years.length === 0) continue;            // no DOB info on record → can't verify → not a match
-    if (!years.includes(dobParts.year)) continue;
+    const dobPositive = years.length > 0 && years.includes(dobParts.year);
 
-    // ── CHECK 3: IDENTIFICATION NUMBER ──
-    // Submitted CNIC (digits only, dashes stripped) must equal any one of the
-    // record's identification_numbers (also alnum-only, case-insensitive).
+    // ── CHECK 3 (corroborating): CNIC ──
+    // Positive only if the record's identification_numbers array contains the
+    // submitted CNIC (alnum-normalised comparison). Empty list → 0 corroborating.
     const ids = asArray(row.identification_numbers_json);
-    if (ids.length === 0) continue;              // record has no IDs → can't verify → not a match
-    const anyIdMatches = ids.some((id) => idsMatch(cnicAlnum, id));
-    if (!anyIdMatches) continue;
+    const cnicPositive = ids.some((id) => idsMatch(cnicAlnum, id));
 
-    // All three independent verifications passed.
-    hits.push({ row, similarity: round2(nameSim) });
+    const corroboratingCount = (dobPositive ? 1 : 0) + (cnicPositive ? 1 : 0);
+    if (corroboratingCount === 0) continue; // name-only match is not a hit
+
+    const criteriaMatched = ['name'];
+    const criteriaNotMatched = [];
+    if (dobPositive) criteriaMatched.push('dob'); else criteriaNotMatched.push('dob');
+    if (cnicPositive) criteriaMatched.push('cnic'); else criteriaNotMatched.push('cnic');
+
+    hits.push({
+      row,
+      similarity: round2(nameSim),
+      corroboratingCount,
+      criteriaMatched,
+      criteriaNotMatched,
+    });
   }
 
   if (hits.length === 0) return { matched: false, match_type: 'NO_MATCH', records: [] };
-  hits.sort((a, b) => b.similarity - a.similarity);
 
-  const anyConfirmed = hits.some((h) => h.similarity >= CONFIRMED_SIMILARITY);
+  // Sort strongest first: 2/2 before 1/2, then by name similarity within each band.
+  hits.sort((a, b) =>
+    b.corroboratingCount - a.corroboratingCount || b.similarity - a.similarity,
+  );
+
+  // Top-level match_type reflects the STRONGEST hit — a run with any 2/2 hit
+  // reports CONFIRMED even if it also contains 1/2 partials.
+  const anyConfirmed = hits.some((h) => h.corroboratingCount === 2);
 
   return {
     matched: true,
     match_type: anyConfirmed ? 'CONFIRMED_MATCH' : 'POSSIBLE_MATCH',
-    records: hits.map(({ row, similarity }) => ({
+    records: hits.map(({ row, similarity, corroboratingCount, criteriaMatched, criteriaNotMatched }) => ({
       ref_code: row.ref_code,
       primary_name: row.primary_name,
       aliases: asArray(row.aliases_json),
@@ -179,6 +197,11 @@ export async function matchUnsc({ fullName, cnic, dob }) {
       identification_numbers: asArray(row.identification_numbers_json),
       pakistan_link: pakistanLink(row), // informational only
       match_score: similarity,
+      // Per-record classification — a POSSIBLE hit inside a run that also has
+      // a CONFIRMED hit still shows as POSSIBLE at the record level.
+      match_type: corroboratingCount === 2 ? 'CONFIRMED_MATCH' : 'POSSIBLE_MATCH',
+      criteria_matched: criteriaMatched,
+      criteria_not_matched: criteriaNotMatched,
     })),
   };
 }

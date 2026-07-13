@@ -81,14 +81,22 @@ function renderUnsc(doc, result, version) {
   doc.font('Helvetica').moveDown(0.3);
 
   if (!status.hit) {
-    // The 3-check rule (name + DOB year + ID) is strict — be clear that NO_MATCH
-    // here means "no entry passes all three" rather than "person not on list."
     doc.text(
-      'No entry passes the strict three-check (name, year of birth, and identification number) verification.',
+      'No entry matched. Screening requires a name match plus at least one of ' +
+        '{year of birth, CNIC / identification number} matching the same UNSC entry.',
     );
   } else {
     (result.records || []).forEach((r) => {
       doc.moveDown(0.3);
+      // Prominent per-record strength label so the compliance officer sees at
+      // a glance whether this row is a full or partial hit.
+      const strength =
+        r.match_type === 'CONFIRMED_MATCH'
+          ? 'FULL MATCH — name + year of birth + CNIC all align'
+          : 'PARTIAL MATCH — manual review required';
+      doc.font('Helvetica-Bold').text(`  ${strength}`);
+      doc.font('Helvetica');
+
       field(doc, '  Reference', r.ref_code);
       field(doc, '  Primary Name', r.primary_name);
       field(doc, '  Aliases', (r.aliases || []).join('; ') || '—');
@@ -100,6 +108,14 @@ function renderUnsc(doc, result, version) {
       if (r.pakistan_link) field(doc, '  Pakistan Link', r.pakistan_link); // informational only
       if (typeof r.match_score === 'number') {
         field(doc, '  Name Match Score', `${Math.round(r.match_score * 100)}%`);
+      }
+      // Which of the three criteria contributed to this hit — explicit evidence
+      // for the compliance officer / auditor.
+      if (Array.isArray(r.criteria_matched)) {
+        field(doc, '  Criteria Matched', r.criteria_matched.join(', '));
+      }
+      if (Array.isArray(r.criteria_not_matched) && r.criteria_not_matched.length > 0) {
+        field(doc, '  Criteria Not Matched', r.criteria_not_matched.join(', '));
       }
     });
   }

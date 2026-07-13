@@ -184,9 +184,17 @@ response as a real-but-missing token, so attackers can't enumerate.
 ### Notes on matching behaviour
 
 - **NACTA** ignores `dob` — matches on CNIC + name + father per the existing two-level rule.
-- **UNSC** uses the strict 3-check (name + year-of-birth + CNIC). All three must
-  match positively or the report says NO RECORD FOUND. UNSC records without a
-  CNIC stored never match (most don't — the customer base is Pakistani only).
+- **UNSC** uses a scored 3-check (name + year-of-birth + CNIC). Name is mandatory;
+  DOB and CNIC each contribute one corroborating point when they positively match
+  a UNSC entry. Classification:
+    - **Name + DOB + CNIC all match** → `CONFIRMED_MATCH` (`unsc_match_type: "CONFIRMED_MATCH"`)
+    - **Name + one of {DOB, CNIC} matches** → `POSSIBLE_MATCH` (partial — needs manual review)
+    - **Name only** or **no name** → `NO_MATCH` (not surfaced)
+  Nulls on the UNSC record contribute 0 corroborating (neither positive nor negative),
+  so a UNSC entry with no stored DOB and no stored CNIC is effectively unmatchable —
+  by design, since there's nothing to corroborate a name hit against.
+  The generated PDF shows, per record, a `Criteria Matched` line so a compliance
+  reviewer sees exactly which of the three signals fired.
 
 ### Audit
 
