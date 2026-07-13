@@ -1,4 +1,4 @@
-// NACTA sync (cron target, every 3h).
+// NACTA sync (cron target, hourly).
 //   npm run sync:nacta
 //
 // Why Playwright: nfs.nacta.gov.pk is a Blazor Server app — the "Export Excel"
@@ -6,25 +6,29 @@
 // event server-side, which builds the file and streams it back via WebSocket.
 // We mimic a real user with a headless Chromium browser.
 //
-// Optimisation: the page shows "Total Results: NNNN" near the top. We scrape
-// that first, compare to last_count, and skip the Export click entirely if
-// nothing changed. Saves NACTA's server the file build + saves us the parse.
+// 2026-07-13 change: **every run now performs a full download + parse + ingest**.
+// The previous count-based skip was unsafe — NACTA can rotate records (equal
+// add + remove) without the visible count changing, and modifications to
+// existing entries would never be detected. Full scan every run guarantees the
+// DB is aligned with NACTA's live list within one cron interval. Cost per run:
+// ~200 KB download + ~10 s CPU. Trivial. The dedup logic in listIngestService
+// is idempotent so re-ingesting identical data adds/deactivates zero records;
+// only in-file duplicates and per-record warnings re-emit events (giving
+// compliance evidence that verification ran).
 //
 // Configurables (via env):
 //   NACTA_URL                  default https://nfs.nacta.gov.pk/
-//   NACTA_SYNC_TIMEOUT_MS      default 90000
-//   NACTA_FORCE_DOWNLOAD       set to '1' to bypass the count-check
+//   NACTA_SYNC_TIMEOUT_MS      default 180000
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import { config } from '../config/env.js';
 import { parseNactaExcel } from '../parsers/excelParser.js';
 import { ingestNacta } from '../services/listIngestService.js';
-import { readState, writeState, runSync, logEvents } from './_runSync.js';
+import { writeState, runSync, logEvents } from './_runSync.js';
 
 const URL = process.env.NACTA_URL || 'https://nfs.nacta.gov.pk/';
 // 3-minute default: the Blazor SignalR data load can be slow over long-haul links.
 const TIMEOUT_MS = Number(process.env.NACTA_SYNC_TIMEOUT_MS || 180_000);
-const FORCE = process.env.NACTA_FORCE_DOWNLOAD === '1';
 const DEBUG_DIR = '/tmp';
 
 /** Write the failed page state to /tmp for diagnosis. Best-effort — swallows errors. */
@@ -147,14 +151,7 @@ async function exportExcel(page) {
 await runSync('nacta', async (logId) => {
   const { browser, page, count } = await openAndScrape();
   try {
-    // Skip-if-unchanged guard.
-    if (!FORCE) {
-      const state = await readState('nacta');
-      if (state.last_count !== null && state.last_count === count) {
-        return { outcome: 'unchanged', reason: `count unchanged at ${count}` };
-      }
-    }
-
+    // Full scan every run — no count-based skip. See file header for rationale.
     const buf = await exportExcel(page);
 
     console.log('[nacta] parsing Excel ...');
