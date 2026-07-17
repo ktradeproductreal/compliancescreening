@@ -140,18 +140,41 @@ export async function getScreening(id) {
 }
 
 /** Paginated history, most recent first (PRD §7.6 / §11). */
-export async function listHistory({ page = 1, pageSize = 20 } = {}) {
+export async function listHistory({ page = 1, pageSize = 20, q = '' } = {}) {
   // LIMIT/OFFSET are inlined (not bound) — mysql2 prepared statements reject them
   // as parameters. Safe here because both are coerced to bounded integers.
   const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
 
+  // Auto-detect search mode from the query shape: any letter → name search
+  // (LIKE on input_full_name); pure digits/dashes/spaces → CNIC search (strip
+  // dashes on both sides so users can type with or without them).
+  const search = String(q || '').trim();
+  let where = '';
+  const params = {};
+  if (search) {
+    if (/[a-zA-Z]/.test(search)) {
+      where = 'WHERE input_full_name LIKE :name';
+      params.name = `%${search}%`;
+    } else {
+      const digits = search.replace(/\D/g, '');
+      if (digits) {
+        where = "WHERE REPLACE(input_cnic, '-', '') LIKE :cnic";
+        params.cnic = `%${digits}%`;
+      }
+    }
+  }
+
   const rows = await query(
     `SELECT id, input_cnic, input_full_name, input_father_name, input_dob,
             nacta_result_json, unsc_result_json, screened_at
-     FROM screenings ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`,
+     FROM screenings ${where} ORDER BY id DESC LIMIT ${limit} OFFSET ${offset}`,
+    params,
   );
-  const totalRow = await queryOne('SELECT COUNT(*) AS total FROM screenings');
+  const totalRow = await queryOne(
+    `SELECT COUNT(*) AS total FROM screenings ${where}`,
+    params,
+  );
 
   return {
     page: Math.max(Number(page) || 1, 1),

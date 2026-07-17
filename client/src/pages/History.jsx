@@ -23,18 +23,34 @@ function ResultBadge({ matchType }) {
 export default function History() {
   const [data, setData] = useState({ rows: [], total: 0, page: 1, pageSize: 20 });
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [pdfId, setPdfId] = useState(null);
 
+  // Debounce keystrokes so we don't hammer the API on every character.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Reset to page 1 whenever the effective query changes, otherwise a search
+  // from page 5 would show "Page 5 of 1" with no results.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
   useEffect(() => {
     setLoading(true);
+    const params = { page, pageSize: 20 };
+    if (debouncedSearch) params.q = debouncedSearch;
     api
-      .get('/screening/history', { params: { page, pageSize: 20 } })
+      .get('/screening/history', { params })
       .then(({ data }) => setData(data))
       .catch((err) => setError(errorMessage(err)))
       .finally(() => setLoading(false));
-  }, [page]);
+  }, [page, debouncedSearch]);
 
   const openPdf = useCallback(async (id) => {
     setPdfId(id);
@@ -56,6 +72,28 @@ export default function History() {
     <div>
       <h1 className="mb-6 text-2xl font-bold text-slate-800">Screening History</h1>
 
+      <div className="mb-4 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by CNIC (with or without dashes) or subject name…"
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 pr-8 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+
       {error && <div className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
       <div className="overflow-x-auto rounded-lg bg-white shadow">
@@ -75,13 +113,15 @@ export default function History() {
             {loading ? (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>
             ) : data.rows.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">No screenings yet.</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                {debouncedSearch ? `No screenings match "${debouncedSearch}".` : 'No screenings yet.'}
+              </td></tr>
             ) : (
               data.rows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-mono text-slate-500">SCR-{String(r.id).padStart(6, '0')}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{r.full_name}</td>
-                  <td className="px-4 py-3 font-mono text-slate-600">{r.cnic}</td>
+                  <td className="px-4 py-3 font-mono text-slate-600">{(r.cnic || '').replace(/-/g, '')}</td>
                   <td className="px-4 py-3 text-slate-600">{new Date(r.screened_at).toLocaleString()}</td>
                   <td className="px-4 py-3"><ResultBadge matchType={r.nacta_match_type} /></td>
                   <td className="px-4 py-3"><ResultBadge matchType={r.unsc_match_type} /></td>

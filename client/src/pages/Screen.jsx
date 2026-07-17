@@ -9,9 +9,33 @@ function formatCnicInput(value) {
 }
 const cnicDigits = (value) => value.replace(/\D/g, '');
 
-// ── DOB validation: dd-MMM-yyyy (e.g. 10-JAN-2030) ──────────────────────────
-const DOB_REGEX = /^\d{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-\d{4}$/i;
-const isDobValid = (v) => DOB_REGEX.test(v.trim());
+// ── DOB input: user types digits, slashes auto-inserted → dd/mm/yyyy ─────────
+const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+function formatDobInput(value) {
+  const digits = value.replace(/\D/g, '').slice(0, 8);
+  const parts = [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)].filter(Boolean);
+  return parts.join('/');
+}
+
+function isDobValid(v) {
+  const m = v.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return false;
+  const [, dd, mm, yyyy] = m;
+  const day = Number(dd);
+  const month = Number(mm);
+  const year = Number(yyyy);
+  if (day < 1 || day > 31) return false;
+  if (month < 1 || month > 12) return false;
+  if (year < 1900 || year > 2100) return false;
+  return true;
+}
+
+// Convert dd/mm/yyyy → dd-MMM-yyyy (the format the backend accepts).
+function dobToBackend(v) {
+  const [dd, mm, yyyy] = v.trim().split('/');
+  return `${dd}-${MONTH_ABBR[Number(mm) - 1]}-${yyyy}`;
+}
 
 // ── Result classification → badge styling ─────────────────────────────────────
 const HIT = { CNIC_MATCH_NAME_CONFIRMED: 1, CONFIRMED_MATCH: 1 };
@@ -50,7 +74,7 @@ function ResultSection({ title, result }) {
               ) : (
                 <>
                   <div className="font-medium">{r.full_name}</div>
-                  <div className="text-xs">Father: {r.father_name} · CNIC: {r.cnic}</div>
+                  <div className="text-xs">Father: {r.father_name} · CNIC: {(r.cnic || '').replace(/-/g, '')}</div>
                 </>
               )}
             </li>
@@ -85,7 +109,7 @@ export default function Screen() {
         cnic,
         full_name: fullName.trim(),
         father_name: fatherName.trim(),
-        dob: dob.trim().toUpperCase(),
+        dob: dobToBackend(dob),
       });
       setResult(data);
     } catch (err) {
@@ -156,14 +180,15 @@ export default function Screen() {
             Date of Birth <span className="text-slate-400">(required for UNSC match)</span>
           </span>
           <input
-            placeholder="10-JAN-2030"
+            inputMode="numeric"
+            placeholder="dd/mm/yyyy"
             value={dob}
-            onChange={(e) => setDob(e.target.value.toUpperCase())}
-            className="w-full rounded border border-slate-300 px-3 py-2 font-mono uppercase focus:border-brand-600 focus:outline-none"
+            onChange={(e) => setDob(formatDobInput(e.target.value))}
+            className="w-full rounded border border-slate-300 px-3 py-2 font-mono focus:border-brand-600 focus:outline-none"
           />
           {dob && !dobValid && (
             <span className="mt-1 block text-xs text-red-600">
-              Format must be dd-MMM-yyyy (e.g. 10-JAN-2030).
+              Enter a valid date in dd/mm/yyyy format.
             </span>
           )}
         </label>
