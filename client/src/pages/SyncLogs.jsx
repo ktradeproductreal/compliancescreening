@@ -162,11 +162,7 @@ export default function SyncLogs() {
 
   return (
     <div>
-      <h1 className="mb-2 text-2xl font-bold text-slate-800">Sync Logs</h1>
-      <p className="mb-6 text-sm text-slate-500">
-        Per-run audit trail of the cron auto-syncs (NACTA every 3h, UNSC daily). Click a row to
-        see which records were added, deactivated, duplicated, or dropped — and why.
-      </p>
+      <h1 className="mb-6 text-2xl font-bold text-slate-800">Sync Logs</h1>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
