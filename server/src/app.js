@@ -8,6 +8,7 @@ import { config } from './config/env.js';
 import { authRouter } from './routes/auth.routes.js';
 import { uploadRouter } from './routes/upload.routes.js';
 import { screeningRouter } from './routes/screening.routes.js';
+import { syncLogRouter } from './routes/syncLog.routes.js';
 import { v2Router } from './routes/v2.routes.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 
@@ -68,6 +69,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/upload', uploadRouter);
   app.use('/api/screening', screeningRouter);
+  app.use('/api/sync-logs', syncLogRouter);
   app.use('/api/v2', v2Router); // external API-key PDF endpoint
 
   app.use(notFound);

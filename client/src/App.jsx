@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Upload from './pages/Upload.jsx';
 import Screen from './pages/Screen.jsx';
 import History from './pages/History.jsx';
+import SyncLogs from './pages/SyncLogs.jsx';
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/upload" element={<Upload />} />
         <Route path="/screen" element={<Screen />} />
         <Route path="/history" element={<History />} />
+        <Route path="/sync-logs" element={<SyncLogs />} />
       </Route>
 
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
