@@ -6,6 +6,7 @@ const NAV = [
   { to: '/upload', label: 'Upload Lists' },
   { to: '/screen', label: 'Run Screening' },
   { to: '/history', label: 'History' },
+  { to: '/record-found', label: 'Record Found' },
   { to: '/sync-logs', label: 'Sync Logs' },
 ];
 

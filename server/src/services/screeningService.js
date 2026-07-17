@@ -139,31 +139,53 @@ export async function getScreening(id) {
   };
 }
 
+// Match_type buckets. Kept in sync with the frontend badges in History.jsx +
+// Screen.jsx: "hit" = confirmed record, "review" = partial/possible match.
+// The "Record Found" tab shows both (hit ∪ review) via filter=hits.
+const HIT_TYPES = ['CNIC_MATCH_NAME_CONFIRMED', 'CONFIRMED_MATCH'];
+const REVIEW_TYPES = ['CNIC_MATCH_NAME_UNCONFIRMED', 'NAME_ONLY_MATCH', 'POSSIBLE_MATCH'];
+const HITS_FILTER_TYPES = [...HIT_TYPES, ...REVIEW_TYPES];
+
 /** Paginated history, most recent first (PRD §7.6 / §11). */
-export async function listHistory({ page = 1, pageSize = 20, q = '' } = {}) {
+export async function listHistory({ page = 1, pageSize = 20, q = '', filter = '' } = {}) {
   // LIMIT/OFFSET are inlined (not bound) — mysql2 prepared statements reject them
   // as parameters. Safe here because both are coerced to bounded integers.
   const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
 
+  const clauses = [];
+  const params = {};
+
   // Auto-detect search mode from the query shape: any letter → name search
   // (LIKE on input_full_name); pure digits/dashes/spaces → CNIC search (strip
   // dashes on both sides so users can type with or without them).
   const search = String(q || '').trim();
-  let where = '';
-  const params = {};
   if (search) {
     if (/[a-zA-Z]/.test(search)) {
-      where = 'WHERE input_full_name LIKE :name';
+      clauses.push('input_full_name LIKE :name');
       params.name = `%${search}%`;
     } else {
       const digits = search.replace(/\D/g, '');
       if (digits) {
-        where = "WHERE REPLACE(input_cnic, '-', '') LIKE :cnic";
+        clauses.push("REPLACE(input_cnic, '-', '') LIKE :cnic");
         params.cnic = `%${digits}%`;
       }
     }
   }
+
+  // filter=hits → only rows where NACTA or UNSC returned a confirmed or
+  // partial/possible match. Uses JSON_EXTRACT since match_type is inside the
+  // result JSON blob.
+  if (filter === 'hits') {
+    const placeholders = HITS_FILTER_TYPES.map((_, i) => `:mt${i}`).join(',');
+    HITS_FILTER_TYPES.forEach((t, i) => { params[`mt${i}`] = t; });
+    clauses.push(
+      `(JSON_UNQUOTE(JSON_EXTRACT(nacta_result_json, '$.match_type')) IN (${placeholders})
+        OR JSON_UNQUOTE(JSON_EXTRACT(unsc_result_json, '$.match_type')) IN (${placeholders}))`,
+    );
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const rows = await query(
     `SELECT id, input_cnic, input_full_name, input_father_name, input_dob,

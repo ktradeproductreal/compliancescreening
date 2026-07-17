@@ -8,12 +8,13 @@ export async function runScreeningHandler(req, res) {
   res.status(201).json(result);
 }
 
-/** GET /api/screening/history?page=&pageSize=&q= */
+/** GET /api/screening/history?page=&pageSize=&q=&filter= */
 export async function historyHandler(req, res) {
   const result = await listHistory({
     page: req.query.page,
     pageSize: req.query.pageSize,
     q: req.query.q,
+    filter: req.query.filter,
   });
   res.json(result);
 }
