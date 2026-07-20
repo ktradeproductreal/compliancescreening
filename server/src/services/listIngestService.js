@@ -1,58 +1,32 @@
 // Shared list-ingest logic — called by both the UI upload controller and the
-// cron sync scripts. Records are deduplicated via an IDENTITY KEY:
-//   - NACTA with CNIC:    (cnic, full_name)
-//   - NACTA without CNIC: (full_name, father_name)
-//   - UNSC:               ref_code
-// Behaviour per record:
-//   - identity matches active record   → keep (NACTA) / update other fields (UNSC)
-//   - identity matches inactive record → reactivate (+ update for UNSC)
-//   - identity not in DB               → insert with is_active = 1
-//   - active record absent from file   → mark is_active = 0 (kept for audit)
+// cron sync scripts.
+//
+// NACTA (2026-07-20): wipe-and-reinsert. Every sync DELETEs all nacta_records
+// and INSERTs the incoming set as-is. No identity dedup, no duplicates dropped
+// — the DB is an exact mirror of what NACTA published at scrape time. Rationale:
+// the previous identity-key dedup could hide records NACTA legitimately listed
+// twice, and the every-15-min cron makes per-record "first seen" audit
+// low-value. Per-run audit is preserved via sync_log.delta_json (added,
+// deactivated counts).
+//
+// UNSC: still uses identity-key (ref_code) dedup with field-refresh on match —
+// UNSC records legitimately update over time (aliases, DOB corrections), and
+// ref_code is guaranteed unique upstream.
 //
 // Both functions take a transaction connection so the whole ingest is atomic.
 import { withTransaction } from '../db/db.js';
 import { nextVersion } from './versionService.js';
 
-// ─── identity-key helpers ────────────────────────────────────────────────────
-
-/** NACTA identity. CNIC-bearing → (cnic, full_name). CNIC-less → (full_name, father_name). */
-function nactaKey(r) {
-  if (r.cnic) return `c|${r.cnic}|${r.full_name}`;
-  return `n|${r.full_name}|${r.father_name}`;
-}
-
-// ─── NACTA ingest ────────────────────────────────────────────────────────────
+// ─── NACTA ingest (wipe & re-insert) ─────────────────────────────────────────
 
 async function ingestNactaInner({ conn, records, filename, userId }) {
-  // Per-record audit events collected throughout the ingest and returned to the
-  // caller (which persists them to sync_events + logs them to stdout).
+  // Per-record audit events. For wipe-and-reinsert we don't emit added/
+  // deactivated per row (would be 5000+ rows every 15 min → sync_events
+  // balloon); the delta_json summary covers it. Parser-level events
+  // (skipped, warning) are still logged by the caller.
   const events = [];
 
-  // 1. Dedupe within the incoming file (first occurrence wins).
-  const incomingByKey = new Map();
-  const firstRowByKey = new Map();
-  let duplicatesInFile = 0;
-  for (const r of records) {
-    const k = nactaKey(r);
-    if (incomingByKey.has(k)) {
-      duplicatesInFile += 1;
-      events.push({
-        event_type: 'duplicate_in_file',
-        row_number: r.row_number ?? null,
-        cnic: r.cnic,
-        full_name: r.raw_full_name,
-        father_name: r.raw_father_name,
-        detail: r.cnic
-          ? `Same CNIC + name as row ${firstRowByKey.get(k)} in this file — second occurrence dropped.`
-          : `Same name + father as row ${firstRowByKey.get(k)} in this file — second occurrence dropped (CNIC-less record).`,
-      });
-      continue;
-    }
-    incomingByKey.set(k, r);
-    firstRowByKey.set(k, r.row_number ?? null);
-  }
-
-  // 2. Compute next list version + flip list-metadata active flag.
+  // 1. Create the new list version + flip list-metadata active flag.
   const version = await nextVersion(conn, 'nacta');
   await conn.execute('UPDATE nacta_lists SET is_active = 0 WHERE is_active = 1');
   const [listResult] = await conn.execute(
@@ -63,75 +37,15 @@ async function ingestNactaInner({ conn, records, filename, userId }) {
   );
   const listId = listResult.insertId;
 
-  // 3. Load every existing record (active + inactive) for identity matching.
-  const [existing] = await conn.query(
-    'SELECT id, cnic, full_name, father_name, is_active FROM nacta_records',
-  );
-  const existingByKey = new Map();
-  for (const r of existing) existingByKey.set(nactaKey(r), r);
+  // 2. Wipe. No FK points at nacta_records, so DELETE is safe. Old
+  //    sync_events.existing_record_id values become dangling ints — that's
+  //    fine, they're informational, not a FK.
+  const [delResult] = await conn.execute('DELETE FROM nacta_records');
+  const previouslyStored = delResult.affectedRows;
 
-  // 4. Categorise.
-  const toInsert = [];
-  const toActivate = []; // ids of inactive existing rows that reappear
-  const matchedExistingIds = new Set();
-
-  for (const [key, incoming] of incomingByKey) {
-    const hit = existingByKey.get(key);
-    if (hit) {
-      matchedExistingIds.add(hit.id);
-      if (!hit.is_active) {
-        toActivate.push(hit.id);
-        events.push({
-          event_type: 'reactivated',
-          row_number: incoming.row_number ?? null,
-          cnic: incoming.cnic,
-          full_name: incoming.raw_full_name,
-          father_name: incoming.raw_father_name,
-          existing_record_id: hit.id,
-          detail: `Existing DB record #${hit.id} was inactive; reappeared in this upload — reactivated.`,
-        });
-      }
-    } else {
-      toInsert.push(incoming);
-      events.push({
-        event_type: 'added',
-        row_number: incoming.row_number ?? null,
-        cnic: incoming.cnic,
-        full_name: incoming.raw_full_name,
-        father_name: incoming.raw_father_name,
-        detail: incoming.cnic
-          ? `New person — no prior DB record with CNIC ${incoming.cnic}.`
-          : 'New person — no prior DB record with this name/father (CNIC-less).',
-      });
-    }
-  }
-
-  // 5. Deactivate rows that were active but no longer appear.
-  const deactivatedRows = existing.filter((r) => r.is_active && !matchedExistingIds.has(r.id));
-  const toDeactivateIds = deactivatedRows.map((r) => r.id);
-  if (toDeactivateIds.length > 0) {
-    await conn.query('UPDATE nacta_records SET is_active = 0 WHERE id IN (?)', [toDeactivateIds]);
-    for (const r of deactivatedRows) {
-      events.push({
-        event_type: 'deactivated',
-        row_number: null,
-        cnic: r.cnic,
-        full_name: r.full_name,
-        father_name: r.father_name,
-        existing_record_id: r.id,
-        detail: `DB record #${r.id} not present in current upload — marked inactive (kept in DB for audit).`,
-      });
-    }
-  }
-
-  // 6. Reactivate rows that reappear.
-  if (toActivate.length > 0) {
-    await conn.query('UPDATE nacta_records SET is_active = 1 WHERE id IN (?)', [toActivate]);
-  }
-
-  // 7. Bulk-insert new records.
-  if (toInsert.length > 0) {
-    const values = toInsert.map((r) => [
+  // 3. Bulk-insert everything as-is (no dedup).
+  if (records.length > 0) {
+    const values = records.map((r) => [
       listId, r.full_name, r.father_name, r.cnic,
       r.raw_full_name, r.raw_father_name, r.raw_cnic, 1,
     ]);
@@ -144,22 +58,24 @@ async function ingestNactaInner({ conn, records, filename, userId }) {
     );
   }
 
-  // 8. record_count = currently active count.
-  const totalActive = matchedExistingIds.size + toInsert.length;
+  // 4. record_count = what we just inserted.
+  const totalActive = records.length;
   await conn.execute('UPDATE nacta_lists SET record_count = ? WHERE id = ?', [totalActive, listId]);
 
-  const kept = matchedExistingIds.size - toActivate.length;
+  // Keep the stats shape the same as before so downstream (frontend Sync Logs,
+  // UI upload response) don't need to change. In wipe mode: added == total,
+  // deactivated == previous count, kept/reactivated/duplicates_in_file == 0.
   return {
     listId,
     version,
-    events, // per-record audit events for sync_events + stdout
+    events,
     stats: {
       total_active: totalActive,
-      added: toInsert.length,
-      kept,
-      reactivated: toActivate.length,
-      deactivated: toDeactivateIds.length,
-      duplicates_in_file: duplicatesInFile,
+      added: totalActive,
+      kept: 0,
+      reactivated: 0,
+      deactivated: previouslyStored,
+      duplicates_in_file: 0,
     },
   };
 }
