@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import { api, errorMessage } from '../api/client.js';
+import { formatPkt } from '../utils/dates.js';
 
 // ── Status → badge styling ────────────────────────────────────────────────────
 const STATUS_STYLE = {
@@ -220,7 +221,7 @@ export default function SyncLogs() {
                       onClick={() => setExpandedId(isOpen ? null : r.id)}
                     >
                       <td className="px-4 py-3 font-medium uppercase text-slate-700">{r.source}</td>
-                      <td className="px-4 py-3 text-slate-600">{new Date(r.started_at).toLocaleString()}</td>
+                      <td className="px-4 py-3 text-slate-600">{formatPkt(r.started_at)}</td>
                       <td className="px-4 py-3 font-mono text-slate-500">
                         {formatDuration(r.started_at, r.ended_at)}
                       </td>

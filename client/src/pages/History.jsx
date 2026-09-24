@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errorMessage } from '../api/client.js';
+import { formatPkt } from '../utils/dates.js';
 
 const HIT = { CNIC_MATCH_NAME_CONFIRMED: 1, CONFIRMED_MATCH: 1 };
 const REVIEW = { CNIC_MATCH_NAME_UNCONFIRMED: 1, NAME_ONLY_MATCH: 1, POSSIBLE_MATCH: 1 };
@@ -122,7 +123,7 @@ export default function History() {
                   <td className="px-4 py-3 font-mono text-slate-500">SCR-{String(r.id).padStart(6, '0')}</td>
                   <td className="px-4 py-3 font-medium text-slate-800">{r.full_name}</td>
                   <td className="px-4 py-3 font-mono text-slate-600">{(r.cnic || '').replace(/-/g, '')}</td>
-                  <td className="px-4 py-3 text-slate-600">{new Date(r.screened_at).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatPkt(r.screened_at)}</td>
                   <td className="px-4 py-3"><ResultBadge matchType={r.nacta_match_type} /></td>
                   <td className="px-4 py-3"><ResultBadge matchType={r.unsc_match_type} /></td>
                   <td className="px-4 py-3">
