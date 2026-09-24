@@ -1,6 +1,48 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, errorMessage } from '../api/client.js';
+import { formatPkt } from '../utils/dates.js';
+
+function extractFilename(disposition, fallback) {
+  if (!disposition) return fallback;
+  const m = /filename="?([^";]+)"?/i.exec(disposition);
+  return m?.[1] || fallback;
+}
+
+async function downloadList(source, setBusy, setError) {
+  setError('');
+  setBusy(true);
+  try {
+    const res = await api.get(`/upload/${source}/download`, { responseType: 'blob' });
+    const filename = extractFilename(
+      res.headers['content-disposition'],
+      `${source}-list.xlsx`,
+    );
+    const url = window.URL.createObjectURL(res.data);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    // Blob responses hide JSON error bodies — decode if present.
+    if (err?.response?.data instanceof Blob) {
+      try {
+        const text = await err.response.data.text();
+        const parsed = JSON.parse(text);
+        setError(parsed.error || 'Download failed.');
+        return;
+      } catch {
+        // fall through to generic message
+      }
+    }
+    setError(errorMessage(err, 'Download failed.'));
+  } finally {
+    setBusy(false);
+  }
+}
 
 function SyncBadge({ sync }) {
   if (!sync) {
@@ -20,9 +62,11 @@ function SyncBadge({ sync }) {
   return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${v.cls}`}>{v.text}</span>;
 }
 
-function ListCard({ title, data }) {
+function ListCard({ title, source, data }) {
   const active = !!data;
   const sync = data?.last_sync;
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   return (
     <div className="rounded-lg bg-white p-6 shadow">
       <div className="mb-4 flex items-center justify-between">
@@ -48,7 +92,7 @@ function ListCard({ title, data }) {
           <div className="flex justify-between">
             <dt>Uploaded</dt>
             <dd className="font-medium text-slate-800">
-              {new Date(data.uploaded_at).toLocaleString()}
+              {formatPkt(data.uploaded_at)}
             </dd>
           </div>
           <div className="mt-3 border-t border-slate-100 pt-3">
@@ -58,7 +102,7 @@ function ListCard({ title, data }) {
             </div>
             {sync && (
               <div className="mt-1 text-xs text-slate-500">
-                {new Date(sync.started_at).toLocaleString()}
+                {formatPkt(sync.started_at)}
                 {sync.status === 'failed' && sync.error && (
                   <span className="ml-2 text-red-600" title={sync.error}>
                     — {String(sync.error).split('\n')[0].slice(0, 80)}
@@ -67,6 +111,21 @@ function ListCard({ title, data }) {
               </div>
             )}
           </div>
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => downloadList(source, setDownloading, setDownloadError)}
+              disabled={downloading}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {downloading ? 'Preparing…' : 'Download Excel'}
+            </button>
+          </div>
+          {downloadError && (
+            <div className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">
+              {downloadError}
+            </div>
+          )}
         </dl>
       ) : (
         <p className="text-sm text-slate-500">No list has been uploaded yet.</p>
@@ -93,8 +152,8 @@ export default function Dashboard() {
       {error && <div className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
       <div className="mb-8 grid gap-6 sm:grid-cols-2">
-        <ListCard title="NACTA List" data={status?.nacta} />
-        <ListCard title="UNSC List" data={status?.unsc} />
+        <ListCard title="NACTA List" source="nacta" data={status?.nacta} />
+        <ListCard title="UNSC List" source="unsc" data={status?.unsc} />
       </div>
 
       <div className="flex flex-wrap gap-3">

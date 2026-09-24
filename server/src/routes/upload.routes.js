@@ -1,5 +1,11 @@
 import { Router } from 'express';
-import { uploadNacta, uploadUnsc, getStatus } from '../controllers/upload.controller.js';
+import {
+  uploadNacta,
+  uploadUnsc,
+  getStatus,
+  downloadNacta,
+  downloadUnsc,
+} from '../controllers/upload.controller.js';
 import { requireAuth } from '../middleware/auth.js';
 import { uploadNactaFile, uploadUnscFile } from '../middleware/upload.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -12,3 +18,5 @@ uploadRouter.use(requireAuth);
 uploadRouter.post('/nacta', uploadNactaFile, asyncHandler(uploadNacta));
 uploadRouter.post('/unsc', uploadUnscFile, asyncHandler(uploadUnsc));
 uploadRouter.get('/status', asyncHandler(getStatus));
+uploadRouter.get('/nacta/download', asyncHandler(downloadNacta));
+uploadRouter.get('/unsc/download', asyncHandler(downloadUnsc));
